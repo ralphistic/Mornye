@@ -98,7 +98,10 @@ class _LocalLibraryArtworkBuilderState
           )
         : null;
     final cover = isFlac
-        ? embedded
+        ? embedded ??
+            (DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(widget.filePath)
+                ? _coverPath
+                : null)
         : _coverPath ??
             DownloadedEmbeddedCoverResolver.resolve(
               widget.filePath,

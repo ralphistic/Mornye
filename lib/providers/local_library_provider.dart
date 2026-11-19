@@ -10,6 +10,7 @@ import 'package:mornye/models/track.dart';
 import 'package:mornye/providers/library_album_artwork_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/services/cover_store.dart';
+import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
 import 'package:mornye/services/library_cleanup.dart';
 import 'package:mornye/services/library_collections_database.dart';
 import 'package:mornye/services/library_database.dart';

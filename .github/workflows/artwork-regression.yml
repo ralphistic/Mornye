@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: artwork-regression-${{ github.ref }}
+  group: artwork-regression-v2-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:

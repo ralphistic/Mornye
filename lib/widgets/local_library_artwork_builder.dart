@@ -87,10 +87,9 @@ class _LocalLibraryArtworkBuilderState
     // For FLAC, the embedded picture is authoritative. A scan thumbnail can
     // still point to an older image even when the file's picture is correct.
     // Never display a stale scan thumbnail while FLAC extraction completes.
-    final filePath = widget.filePath ?? '';
-    final isFlac = DownloadedEmbeddedCoverResolver.cleanFilePath(
-      filePath,
-    ).toLowerCase().endsWith('.flac');
+    final isFlac = DownloadedEmbeddedCoverResolver.isLocalFlac(
+      widget.filePath,
+    );
     final embedded = isFlac
         ? DownloadedEmbeddedCoverResolver.resolve(
             widget.filePath,

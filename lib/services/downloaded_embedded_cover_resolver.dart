@@ -123,6 +123,16 @@ class DownloadedEmbeddedCoverResolver {
     return filePath;
   }
 
+  /// Only local FLAC files can supply embedded artwork. Network references
+  /// may end in .flac but must keep their provider artwork instead.
+  static bool isLocalFlac(String? filePath) {
+    final path = cleanFilePath(filePath);
+    return path.toLowerCase().endsWith('.flac') &&
+        (path.startsWith('content://') ||
+            p.isAbsolute(path) ||
+            p.windows.isAbsolute(path));
+  }
+
   static Future<int?> readFileModTimeMillis(String? filePath) async {
     final cleanPath = cleanFilePath(filePath);
     if (cleanPath.isEmpty) return null;

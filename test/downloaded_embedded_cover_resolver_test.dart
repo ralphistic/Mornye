@@ -56,6 +56,29 @@ void main() {
     }
   });
 
+  test('only actual local FLAC paths override provider artwork', () {
+    expect(DownloadedEmbeddedCoverResolver.isLocalFlac('/music/song.flac'), isTrue);
+    expect(
+      DownloadedEmbeddedCoverResolver.isLocalFlac(
+        'content://example.documents/song.flac',
+      ),
+      isTrue,
+    );
+    expect(
+      DownloadedEmbeddedCoverResolver.isLocalFlac(
+        'network://share/song.flac',
+      ),
+      isFalse,
+    );
+    expect(
+      DownloadedEmbeddedCoverResolver.isLocalFlac(
+        'https://example.test/song.flac',
+      ),
+      isFalse,
+    );
+    expect(DownloadedEmbeddedCoverResolver.isLocalFlac('/music/song.mp3'), isFalse);
+  });
+
   test('metadata artwork prefers embedded, then local, then remote', () {
     expect(
       resolveMetadataArtworkSource(

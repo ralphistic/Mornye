@@ -330,7 +330,11 @@ extension _LocalLibraryScan on LocalLibraryNotifier {
           _log.i('Skipped $skippedDownloads files already in download history');
         }
         if (forceFullScan) {
-          // A forced scan rewrites thumbnails under their existing paths.
+          // A full scan may regenerate the Library's thumbnail files without
+          // changing audio modification times. Invalidate decoded images and
+          // all embedded previews so every visible row resolves fresh art.
+          await DownloadedEmbeddedCoverResolver.clearPersistentCache();
+          DownloadedEmbeddedCoverResolver.announcePreviewsCleared();
           PaintingBinding.instance.imageCache
             ..clear()
             ..clearLiveImages();

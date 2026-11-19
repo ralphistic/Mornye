@@ -47,5 +47,5 @@ jobs:
         timeout-minutes: 3
         run: flutter test --reporter expanded --timeout 45s test/playback_artwork_test.dart
       - name: FLAC artwork widget tests
-        timeout-minutes: 5
-        run: flutter test --reporter expanded --timeout 45s test/local_library_artwork_builder_test.dart
+        timeout-minutes: 2
+        run: flutter test --reporter expanded --timeout 30s test/local_library_artwork_builder_test.dart

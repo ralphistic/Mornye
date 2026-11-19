@@ -6,7 +6,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:mornye/services/native_file_hash.dart';
+import 'package:crypto/crypto.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/utils/file_access.dart';
 
@@ -732,16 +732,17 @@ class DownloadedEmbeddedCoverResolver {
 
       // An unchanged cover keeps its path; an edited one gets a new path, so
       // no decoded image of the old cover is shown for it.
-      final targetPath = modTime != null
-          ? persistentPath
-          : p.join(
-              directory.path,
-              _persistentFileName(
-                cleanPath,
-                null,
-                content: await _contentHash(outputPath),
-              ),
-            );
+      // A retagged FLAC can keep the same modification timestamp. Include
+      // the actual picture digest in its preview filename so Flutter cannot
+      // reuse decoded pixels from the old picture at the same file path.
+      final targetPath = p.join(
+        directory.path,
+        _persistentFileName(
+          cleanPath,
+          modTime,
+          content: await _contentHash(outputPath),
+        ),
+      );
       if (!_isCurrentExtraction(job)) {
         await _cleanupCoverPath(outputPath);
         return null;
@@ -844,7 +845,9 @@ class DownloadedEmbeddedCoverResolver {
   }
 
   static Future<String> _contentHash(String path) async {
-    return (await hashFileSha256(path)).substring(0, 16);
+    return (await sha256.bind(File(path).openRead()).first)
+        .toString()
+        .substring(0, 16);
   }
 
   /// Two independently mixed 63-bit FNV-1a lanes keep filenames compact.

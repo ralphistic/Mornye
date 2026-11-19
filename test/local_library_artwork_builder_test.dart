@@ -59,6 +59,13 @@ void main() {
     debugPrint('ARTWORK_TEST: pumped, shown=$shown');
     expect(shown, isNull);
     debugPrint('ARTWORK_TEST: first test completed');
+    // The widget starts a background extraction inside Flutter's fake clock.
+    // Drain that work under real async before tearDown waits for the queue.
+    await tester.runAsync(() async {
+      await DownloadedEmbeddedCoverResolver.resolveOrExtract(flac.path)
+          .timeout(const Duration(seconds: 5));
+    });
+    debugPrint('ARTWORK_TEST: extraction drained');
   });
 
   testWidgets('FLAC uses extracted picture rather than existing scan image', (

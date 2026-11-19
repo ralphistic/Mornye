@@ -887,7 +887,12 @@ class _LibraryBrowseArtworkState extends State<_LibraryBrowseArtwork> {
       entry.samplePath,
       onChanged: _resolveAgain,
     );
-    final cover = isFlac ? embedded : (entry.cover ?? embedded);
+    final cover = isFlac
+        ? embedded ??
+            (DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(entry.samplePath)
+                ? entry.cover
+                : null)
+        : (entry.cover ?? embedded);
     return cover == null
         ? fallback(context)
         : LocalOrNetworkCoverImage(url: cover, placeholder: fallback);

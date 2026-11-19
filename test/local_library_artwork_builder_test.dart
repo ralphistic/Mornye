@@ -72,7 +72,11 @@ void main() {
       () => DownloadedEmbeddedCoverResolver.resolveOrExtract(flac.path),
     );
     expect(extracted, isNotNull);
-    expect(await tester.runAsync(() => File(extracted!).readAsBytes()), [7, 8, 9]);
+    expect(await tester.runAsync(() => File(extracted!).readAsBytes()), [
+      7,
+      8,
+      9,
+    ]);
 
     String? shown;
     await tester.pumpWidget(

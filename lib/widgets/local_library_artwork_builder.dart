@@ -78,12 +78,27 @@ class _LocalLibraryArtworkBuilderState
 
   @override
   Widget build(BuildContext context) {
-    final cover =
+    // For FLAC, the embedded picture is authoritative. A scan thumbnail can
+    // still point to an older image even when the file's picture is correct.
+    // Keep that thumbnail as a temporary fallback while extraction completes.
+    final filePath = widget.filePath ?? '';
+    final isFlac = DownloadedEmbeddedCoverResolver.cleanFilePath(
+      filePath,
+    ).toLowerCase().endsWith('.flac');
+    final embedded = isFlac
+        ? DownloadedEmbeddedCoverResolver.resolve(
+            widget.filePath,
+            onChanged: _onCoverChanged,
+          )
+        : null;
+    final cover = embedded ??
         _coverPath ??
-        DownloadedEmbeddedCoverResolver.resolve(
-          widget.filePath,
-          onChanged: _onCoverChanged,
-        );
+        (isFlac
+            ? null
+            : DownloadedEmbeddedCoverResolver.resolve(
+                widget.filePath,
+                onChanged: _onCoverChanged,
+              ));
     return widget.builder(context, cover);
   }
 }

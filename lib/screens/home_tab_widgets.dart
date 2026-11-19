@@ -658,7 +658,12 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
         filterQuality: FilterQuality.low,
         errorBuilder: (_, _, _) => _fallback(),
       );
-    } else if (widget.imageUrl != null && widget.imageUrl!.isNotEmpty) {
+    } else if (!(widget.downloadedFilePath != null &&
+            DownloadedEmbeddedCoverResolver.cleanFilePath(
+              widget.downloadedFilePath,
+            ).toLowerCase().endsWith('.flac')) &&
+        widget.imageUrl != null &&
+        widget.imageUrl!.isNotEmpty) {
       child = CachedCoverImage(
         imageUrl: widget.imageUrl!,
         width: widget.width,

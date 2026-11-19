@@ -661,7 +661,11 @@ class DownloadedEmbeddedCoverResolver {
       );
       // Without a timestamp a disk copy cannot be validated: it is extracted
       // again once per memory miss and named by its content below.
-      if (modTime != null &&
+      // A FLAC picture may be retagged while the audio file retains its
+      // modification timestamp. Never trust a previous-session disk preview
+      // solely on that timestamp; re-read its embedded picture on cold cache.
+      if (!isLocalFlac(cleanPath) &&
+          modTime != null &&
           !job.forceRefresh &&
           await _isReusablePersistentPreview(persistentPath, cleanPath)) {
         if (!_isCurrentExtraction(job)) return null;

@@ -33,9 +33,9 @@ void main() {
     tester,
   ) async {
     final stale = File('${directory.path}/stale.png');
-    await stale.writeAsBytes([1, 2, 3]);
+    await tester.runAsync(() => stale.writeAsBytes([1, 2, 3]));
     final flac = File('${directory.path}/track.flac');
-    await flac.writeAsBytes([4, 5, 6]);
+    await tester.runAsync(() => flac.writeAsBytes([4, 5, 6]));
 
     String? shown = 'not built';
     await tester.pumpWidget(
@@ -68,11 +68,11 @@ void main() {
           await File(args['output_path']! as String).writeAsBytes([7, 8, 9]);
           return jsonEncode({'success': true});
         });
-    final extracted = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
-      flac.path,
+    final extracted = await tester.runAsync(
+      () => DownloadedEmbeddedCoverResolver.resolveOrExtract(flac.path),
     );
     expect(extracted, isNotNull);
-    expect(await File(extracted!).readAsBytes(), [7, 8, 9]);
+    expect(await tester.runAsync(() => File(extracted!).readAsBytes()), [7, 8, 9]);
 
     String? shown;
     await tester.pumpWidget(
@@ -96,9 +96,9 @@ void main() {
     tester,
   ) async {
     final cover = File('${directory.path}/cover.png');
-    await cover.writeAsBytes([1, 2, 3]);
+    await tester.runAsync(() => cover.writeAsBytes([1, 2, 3]));
     final mp3 = File('${directory.path}/track.mp3');
-    await mp3.writeAsBytes([4, 5, 6]);
+    await tester.runAsync(() => mp3.writeAsBytes([4, 5, 6]));
 
     String? shown;
     await tester.pumpWidget(

@@ -62,8 +62,9 @@ void main() {
     // The widget starts a background extraction inside Flutter's fake clock.
     // Drain that work under real async before tearDown waits for the queue.
     await tester.runAsync(() async {
-      await DownloadedEmbeddedCoverResolver.resolveOrExtract(flac.path)
-          .timeout(const Duration(seconds: 5));
+      await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        flac.path,
+      ).timeout(const Duration(seconds: 5));
     });
     debugPrint('ARTWORK_TEST: extraction drained');
   });

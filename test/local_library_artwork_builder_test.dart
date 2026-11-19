@@ -32,17 +32,20 @@ void main() {
   testWidgets('FLAC never displays a stale scan cover while extracting', (
     tester,
   ) async {
-    debugPrint('ARTWORK_TEST: first test entered');
     final stale = File('${directory.path}/stale.png');
-    debugPrint('ARTWORK_TEST: writing stale');
     await tester.runAsync(() => stale.writeAsBytes([1, 2, 3]));
-    debugPrint('ARTWORK_TEST: stale written');
     final flac = File('${directory.path}/track.flac');
     await tester.runAsync(() => flac.writeAsBytes([4, 5, 6]));
-    debugPrint('ARTWORK_TEST: flac written');
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(backendChannel, (call) async {
+          expect(call.method, 'extractCoverToFile');
+          final args = call.arguments as Map<Object?, Object?>;
+          await File(args['output_path']! as String).writeAsBytes([7, 8, 9]);
+          return jsonEncode({'success': true});
+        });
 
     String? shown = 'not built';
-    debugPrint('ARTWORK_TEST: pumping widget');
     await tester.pumpWidget(
       Directionality(
         textDirection: TextDirection.ltr,
@@ -56,17 +59,16 @@ void main() {
         ),
       ),
     );
-    debugPrint('ARTWORK_TEST: pumped, shown=$shown');
     expect(shown, isNull);
-    debugPrint('ARTWORK_TEST: first test completed');
-    // The widget starts a background extraction inside Flutter's fake clock.
-    // Drain that work under real async before tearDown waits for the queue.
+    // Flush fake-async microtasks that schedule the widget's extraction.
+    await tester.pump();
     await tester.runAsync(() async {
       await DownloadedEmbeddedCoverResolver.resolveOrExtract(
         flac.path,
-      ).timeout(const Duration(seconds: 5));
+      ).timeout(const Duration(seconds: 10));
     });
-    debugPrint('ARTWORK_TEST: extraction drained');
+    await tester.pump();
+    expect(shown, isNot(stale.path));
   });
 
   testWidgets('FLAC uses extracted picture rather than existing scan image', (

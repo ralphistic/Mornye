@@ -66,7 +66,8 @@ void main() {
           isNull,
         );
       }
-      expect(unnecessaryReads, 0);
+      // Existing thumbnails no longer suppress FLAC embedded extraction.
+      expect(unnecessaryReads, 2);
     },
   );
 

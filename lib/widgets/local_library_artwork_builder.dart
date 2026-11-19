@@ -61,6 +61,12 @@ class _LocalLibraryArtworkBuilderState
         ? null
         : coverFilePath(candidate) ?? candidate;
     if (_coverPath == null) return;
+    // Provider covers are URLs, not filesystem paths. Preserve them for
+    // non-FLAC songs instead of treating them as missing scan thumbnails.
+    if (_coverPath!.startsWith('https://') ||
+        _coverPath!.startsWith('http://')) {
+      return;
+    }
     var available = false;
     try {
       final stat = await File(_coverPath!).stat();

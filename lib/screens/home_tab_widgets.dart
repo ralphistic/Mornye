@@ -661,7 +661,10 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
     } else if (!(widget.downloadedFilePath != null &&
             DownloadedEmbeddedCoverResolver.cleanFilePath(
               widget.downloadedFilePath,
-            ).toLowerCase().endsWith('.flac')) &&
+            ).toLowerCase().endsWith('.flac') &&
+            !DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(
+              widget.downloadedFilePath,
+            )) &&
         widget.imageUrl != null &&
         widget.imageUrl!.isNotEmpty) {
       child = CachedCoverImage(

@@ -75,9 +75,9 @@ void main() {
     tester,
   ) async {
     final stale = File('${directory.path}/old.png');
-    await stale.writeAsBytes([1, 2, 3]);
+    await tester.runAsync(() => stale.writeAsBytes([1, 2, 3]));
     final flac = File('${directory.path}/edited.flac');
-    await flac.writeAsBytes([4, 5, 6]);
+    await tester.runAsync(() => flac.writeAsBytes([4, 5, 6]));
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(backendChannel, (call) async {
           expect(call.method, 'extractCoverToFile');
@@ -86,7 +86,8 @@ void main() {
           return jsonEncode({'success': true});
         });
     final extracted = await tester.runAsync(
-      () => DownloadedEmbeddedCoverResolver.resolveOrExtract(flac.path),
+      () => DownloadedEmbeddedCoverResolver.resolveOrExtract(flac.path)
+          .timeout(const Duration(seconds: 10)),
     );
     expect(extracted, isNotNull);
     expect(await tester.runAsync(() => File(extracted!).readAsBytes()), [

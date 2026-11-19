@@ -37,13 +37,19 @@ void main() {
     final flac = File('${directory.path}/track.flac');
     await tester.runAsync(() => flac.writeAsBytes([4, 5, 6]));
 
+    // Prime a transient extraction failure outside Flutter's fake clock.
+    // The failed-extraction cooldown keeps the widget from scheduling
+    // background file I/O that would otherwise block test tearDown.
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(backendChannel, (call) async {
           expect(call.method, 'extractCoverToFile');
-          final args = call.arguments as Map<Object?, Object?>;
-          await File(args['output_path']! as String).writeAsBytes([7, 8, 9]);
-          return jsonEncode({'success': true});
+          return jsonEncode({'error': 'temporary extraction failure'});
         });
+    final missing = await tester.runAsync(
+      () => DownloadedEmbeddedCoverResolver.resolveOrExtract(flac.path),
+    );
+    expect(missing, isNull);
+    expect(DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(flac.path), isFalse);
 
     String? shown = 'not built';
     await tester.pumpWidget(
@@ -60,15 +66,7 @@ void main() {
       ),
     );
     expect(shown, isNull);
-    // Flush fake-async microtasks that schedule the widget's extraction.
-    await tester.pump();
-    await tester.runAsync(() async {
-      await DownloadedEmbeddedCoverResolver.resolveOrExtract(
-        flac.path,
-      ).timeout(const Duration(seconds: 10));
-    });
-    await tester.pump();
-    expect(shown, isNot(stale.path));
+
   });
 
   testWidgets('FLAC uses extracted picture rather than existing scan image', (

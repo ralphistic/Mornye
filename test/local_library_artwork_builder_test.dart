@@ -49,7 +49,10 @@ void main() {
       () => DownloadedEmbeddedCoverResolver.resolveOrExtract(flac.path),
     );
     expect(missing, isNull);
-    expect(DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(flac.path), isFalse);
+    expect(
+      DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(flac.path),
+      isFalse,
+    );
 
     String? shown = 'not built';
     await tester.pumpWidget(
@@ -66,7 +69,6 @@ void main() {
       ),
     );
     expect(shown, isNull);
-
   });
 
   testWidgets('FLAC uses extracted picture rather than existing scan image', (

@@ -765,7 +765,7 @@ void main() {
       final reused = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
         sourcePath,
       );
-      expect(reused, first);
+      expect(reused, isNot(first));
       // The same FLAC timestamp cannot prove the embedded picture is still
       // identical. A new session must re-extract instead of reusing old bytes.
       expect(extractionCalls, 2);

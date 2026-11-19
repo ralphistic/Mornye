@@ -32,12 +32,17 @@ void main() {
   testWidgets('FLAC never displays a stale scan cover while extracting', (
     tester,
   ) async {
+    print('ARTWORK_TEST: first test entered');
     final stale = File('${directory.path}/stale.png');
+    print('ARTWORK_TEST: writing stale');
     await tester.runAsync(() => stale.writeAsBytes([1, 2, 3]));
+    print('ARTWORK_TEST: stale written');
     final flac = File('${directory.path}/track.flac');
     await tester.runAsync(() => flac.writeAsBytes([4, 5, 6]));
+    print('ARTWORK_TEST: flac written');
 
     String? shown = 'not built';
+    print('ARTWORK_TEST: pumping widget');
     await tester.pumpWidget(
       Directionality(
         textDirection: TextDirection.ltr,
@@ -51,7 +56,9 @@ void main() {
         ),
       ),
     );
+    print('ARTWORK_TEST: pumped, shown=$shown');
     expect(shown, isNull);
+    print('ARTWORK_TEST: first test completed');
   });
 
   testWidgets('FLAC uses extracted picture rather than existing scan image', (

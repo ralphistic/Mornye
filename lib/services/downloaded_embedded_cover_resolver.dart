@@ -971,7 +971,8 @@ class DownloadedEmbeddedCoverResolver {
       final name = p.basename(entity.path);
       try {
         final stat = await entity.stat();
-        if (name.startsWith('v1_') && name.endsWith('.jpg')) {
+        if ((name.startsWith('v1_') || name.startsWith('v2_')) &&
+            name.endsWith('.jpg')) {
           await entity.delete();
           await _deleteFileIfPresent(
             File(_persistentSourceSidecarPath(entity.path)),

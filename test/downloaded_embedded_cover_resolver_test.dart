@@ -227,23 +227,8 @@ void main() {
     'a preview without a source timestamp stays on disk after memory eviction',
     () async {
       const untimed = 'content://example.documents/tree/nas/document/u.flac';
-      var hashes = 0;
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(backendChannel, (call) async {
-            if (call.method == 'runNativeDataJob') {
-              final request =
-                  jsonDecode((call.arguments as Map)['request_json'] as String)
-                      as Map;
-              expect(request['operation'], 'hash_file');
-              expect(await File(request['path'] as String).readAsBytes(), [
-                7,
-                8,
-              ]);
-              hashes++;
-              return {
-                'sha256': sha256.convert([7, 8]).toString(),
-              };
-            }
             if (call.method == 'getSafFileModTimes') {
               final uris = jsonDecode(
                 (call.arguments as Map)['uris'] as String,
@@ -263,7 +248,6 @@ void main() {
         untimed,
       );
       expect(preview, isNotNull);
-      expect(hashes, 1);
       expect(
         preview,
         endsWith('_${sha256.convert([7, 8]).toString().substring(0, 16)}.jpg'),
@@ -292,14 +276,6 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(backendChannel, (call) async {
             if (call.method == 'getSafFileModTimes') return jsonEncode({});
-            if (call.method == 'runNativeDataJob') {
-              final request =
-                  jsonDecode((call.arguments as Map)['request_json'] as String)
-                      as Map;
-              expect(request['operation'], 'hash_file');
-              final bytes = await File(request['path'] as String).readAsBytes();
-              return {'sha256': sha256.convert(bytes).toString()};
-            }
             expect(call.method, 'extractCoverToFile');
             final args = call.arguments as Map<Object?, Object?>;
             await File(args['output_path']! as String).writeAsBytes(cover);

@@ -764,7 +764,7 @@ void main() {
     expect(await File(refreshed!).readAsBytes(), [0xff, 0xd8, 0xff, 0xe0]);
   });
 
-  test('legacy SAF thumbnails are replaced without changing the audio', () async {
+  test('v2 artwork previews are replaced without changing the audio', () async {
     const source = 'content://covers/document/original-artwork.flac';
     sourcePaths.add(source);
     var extractions = 0;
@@ -784,7 +784,7 @@ void main() {
       source,
     ))!;
     await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting();
-    final legacy = preview.replaceFirst('v2_', 'v1_');
+    final legacy = preview.replaceFirst('v3_', 'v2_');
     expect(legacy, isNot(preview));
     await File(preview).rename(legacy);
     await File('$preview.source').rename('$legacy.source');

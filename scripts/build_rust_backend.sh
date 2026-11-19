@@ -166,12 +166,17 @@ elif [[ "$PLATFORM" == "ios" ]]; then
     echo "Error: iOS builds require macOS and Xcode." >&2
     exit 1
   fi
-  rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+  if [[ "${MORNYE_IOS_DEVICE_ONLY:-0}" == "1" ]]; then
+    IOS_TARGETS=(aarch64-apple-ios)
+  else
+    IOS_TARGETS=(aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios)
+  fi
+  rustup target add "${IOS_TARGETS[@]}"
   export IPHONEOS_DEPLOYMENT_TARGET=16.0
   export BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_ios="-isysroot \"$(xcrun --sdk iphoneos --show-sdk-path)\" --target=arm64-apple-ios16.0"
   export BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_ios_sim="-isysroot \"$(xcrun --sdk iphonesimulator --show-sdk-path)\" --target=arm64-apple-ios16.0-simulator"
   export BINDGEN_EXTRA_CLANG_ARGS_x86_64_apple_ios="-isysroot \"$(xcrun --sdk iphonesimulator --show-sdk-path)\" --target=x86_64-apple-ios16.0-simulator"
-  for target in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
+  for target in "${IOS_TARGETS[@]}"; do
     cargo build --locked --release -p mornye-mobile --target "$target"
   done
   HEADERS_DIR="$CARGO_TARGET_DIR/ios/headers"
@@ -180,20 +185,29 @@ elif [[ "$PLATFORM" == "ios" ]]; then
   mkdir -p "$HEADERS_DIR" "$(dirname "$SIMULATOR_LIBRARY")"
   cp "$CARGO_TARGET_DIR/bindings/swift/MornyeBackendFFI.h" "$HEADERS_DIR/"
   cp "$CARGO_TARGET_DIR/bindings/swift/MornyeBackendFFI.modulemap" "$HEADERS_DIR/module.modulemap"
-  # Flutter/CocoaPods may request both simulator architectures, even on an
-  # ARM64 Mac. Supply one universal simulator slice.
-  xcrun lipo -create \
-    "$CARGO_TARGET_DIR/aarch64-apple-ios-sim/release/libmornye_mobile.a" \
-    "$CARGO_TARGET_DIR/x86_64-apple-ios/release/libmornye_mobile.a" \
-    -output "$SIMULATOR_LIBRARY"
-  # xcodebuild refuses to overwrite an existing generated XCFramework.
-  if [[ -d "$FRAMEWORK_DIR" ]]; then
-    rm -rf "$FRAMEWORK_DIR"
+  # Device-only builds omit both simulator libraries. The default full
+  # workflow retains the original universal simulator slice.
+  if [[ "${MORNYE_IOS_DEVICE_ONLY:-0}" == "1" ]]; then
+    if [[ -d "$FRAMEWORK_DIR" ]]; then rm -rf "$FRAMEWORK_DIR"; fi
+    xcodebuild -create-xcframework \
+      -library "$CARGO_TARGET_DIR/aarch64-apple-ios/release/libmornye_mobile.a" -headers "$HEADERS_DIR" \
+      -output "$FRAMEWORK_DIR"
+  else
+    # Flutter/CocoaPods may request both simulator architectures, even on an
+    # ARM64 Mac. Supply one universal simulator slice.
+    xcrun lipo -create \
+      "$CARGO_TARGET_DIR/aarch64-apple-ios-sim/release/libmornye_mobile.a" \
+      "$CARGO_TARGET_DIR/x86_64-apple-ios/release/libmornye_mobile.a" \
+      -output "$SIMULATOR_LIBRARY"
+    # xcodebuild refuses to overwrite an existing generated XCFramework.
+    if [[ -d "$FRAMEWORK_DIR" ]]; then
+      rm -rf "$FRAMEWORK_DIR"
+    fi
+    xcodebuild -create-xcframework \
+      -library "$CARGO_TARGET_DIR/aarch64-apple-ios/release/libmornye_mobile.a" -headers "$HEADERS_DIR" \
+      -library "$SIMULATOR_LIBRARY" -headers "$HEADERS_DIR" \
+      -output "$FRAMEWORK_DIR"
   fi
-  xcodebuild -create-xcframework \
-    -library "$CARGO_TARGET_DIR/aarch64-apple-ios/release/libmornye_mobile.a" -headers "$HEADERS_DIR" \
-    -library "$SIMULATOR_LIBRARY" -headers "$HEADERS_DIR" \
-    -output "$FRAMEWORK_DIR"
   # CocoaPods does not traverse nested symlinks, including a relocated target/.
   # Stage one pod root that Podfile can resolve before scanning its files.
   cp "$CARGO_TARGET_DIR/bindings/swift/MornyeBackend.swift" "$CARGO_TARGET_DIR/ios/"

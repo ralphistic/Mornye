@@ -1,0 +1,71 @@
+name: Fast device-only iOS IPA
+
+on:
+  push:
+    branches:
+      - build/fast-ios-device
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fast-ios-device-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      MORNYE_DISCORD_SDK: "0"
+      MORNYE_IOS_DEVICE_ONLY: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Rust toolchain
+        working-directory: rust_backend
+        run: rustup show
+      - name: Cache Rust compilation
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust_backend -> target
+          cache-targets: true
+          shared-key: ios-device-arm64-v1
+          save-if: ${{ github.ref == 'refs/heads/build/fast-ios-device' }}
+      - name: Build device-only Rust backend
+        run: |
+          echo "Rust build started: $(date -u +%FT%TZ)"
+          bash scripts/build_rust_backend.sh ios
+          echo "Rust build finished: $(date -u +%FT%TZ)"
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: .fvmrc
+          cache: true
+      - name: Prepare Flutter SDK
+        run: dart scripts/prepare_flutter_sdk.dart
+      - name: Configure dependencies
+        run: |
+          flutter pub get
+          cd ios
+          pod install
+      - name: Build unsigned device app
+        run: |
+          echo "Flutter build started: $(date -u +%FT%TZ)"
+          flutter build ios --release --no-codesign --target lib/main.dart
+          python3 scripts/check_backend_ios.py build/ios/iphoneos/Runner.app --backend rust --archs arm64 --platform ios --release
+          echo "Flutter build finished: $(date -u +%FT%TZ)"
+      - name: Package IPA
+        run: |
+          mkdir -p build/ios/ipa/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
+          cd build/ios/ipa
+          zip -qr Mornye-fast-device-unsigned.ipa Payload
+          test -s Mornye-fast-device-unsigned.ipa
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: mornye-fast-device-unsigned-ipa
+          path: build/ios/ipa/Mornye-fast-device-unsigned.ipa

@@ -73,9 +73,10 @@ class DownloadedEmbeddedCoverResolver {
   static const int _maxConcurrentExtractions = 2;
   static const int _maxQueuedBackgroundExtractions = 24;
   static const String _persistentCacheDirectoryName = 'embedded_cover_previews';
-  // v1 SAF previews could contain the Library's 800px thumbnail instead of
-  // original embedded artwork. Re-extract even when the audio has not changed.
-  static const String _persistentCacheVersion = 'v2';
+  // v1 SAF previews could contain the Library's 800px thumbnail. v2
+  // previews may also preserve artwork from before a FLAC tag edit when the
+  // file timestamp was retained. Re-extract once after this upgrade.
+  static const String _persistentCacheVersion = 'v3';
   static const int _maxPersistentCacheEntries = 384;
   static const int _maxPersistentCacheBytes = 160 << 20;
   static const int _persistentCacheSweepTargetBytes = 128 << 20;

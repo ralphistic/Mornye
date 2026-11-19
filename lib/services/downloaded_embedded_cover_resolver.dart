@@ -101,6 +101,12 @@ class DownloadedEmbeddedCoverResolver {
   static const _maxPendingPreviewValidations = 64;
   static DateTime Function() _validationClock = DateTime.now;
   static final _failedExtract = <String, DateTime>{};
+  static final Set<String> _confirmedWithoutEmbeddedCover = <String>{};
+
+  /// True only after the backend explicitly reports that the file has no
+  /// embedded picture. Transient extraction errors do not qualify.
+  static bool hasNoEmbeddedCover(String? path) =>
+      _confirmedWithoutEmbeddedCover.contains(cleanFilePath(path));
   static const _failureRetryDelay = Duration(seconds: 30);
 
   static Directory? _persistentCacheDirectoryOverride;
@@ -230,6 +236,7 @@ class DownloadedEmbeddedCoverResolver {
 
     _pendingRefresh.add(cleanPath);
     _failedExtract.remove(cleanPath);
+    _confirmedWithoutEmbeddedCover.remove(cleanPath);
     onChanged?.call();
   }
 
@@ -244,6 +251,7 @@ class DownloadedEmbeddedCoverResolver {
     _pendingRefresh.remove(cleanPath);
     _pendingPreviewValidation.remove(cleanPath);
     _failedExtract.remove(cleanPath);
+    _confirmedWithoutEmbeddedCover.remove(cleanPath);
     if (cached != null) {
       await _cleanupCacheEntry(cached);
     }
@@ -283,6 +291,7 @@ class DownloadedEmbeddedCoverResolver {
     _pendingPreviewValidation.clear();
     await _previewValidationFuture;
     _failedExtract.clear();
+    _confirmedWithoutEmbeddedCover.clear();
 
     final maintenance = _persistentMaintenanceFuture;
     if (maintenance != null) await maintenance;
@@ -328,6 +337,7 @@ class DownloadedEmbeddedCoverResolver {
     await _previewValidationFuture;
     _validationClock = DateTime.now;
     _failedExtract.clear();
+    _confirmedWithoutEmbeddedCover.clear();
     _cacheGeneration.clear();
     _drainScheduled = false;
 
@@ -372,6 +382,7 @@ class DownloadedEmbeddedCoverResolver {
       _pendingRefresh.remove(oldestKey);
       _pendingPreviewValidation.remove(oldestKey);
       _failedExtract.remove(oldestKey);
+      _confirmedWithoutEmbeddedCover.remove(oldestKey);
     }
   }
 
@@ -651,6 +662,7 @@ class DownloadedEmbeddedCoverResolver {
         );
         _touch(cleanPath, next);
         _failedExtract.remove(cleanPath);
+        _confirmedWithoutEmbeddedCover.remove(cleanPath);
         _trimCacheIfNeeded();
         _notifyCoverChanged(job);
         _schedulePersistentMaintenance();
@@ -679,6 +691,13 @@ class DownloadedEmbeddedCoverResolver {
           await outputFile.exists() &&
           await outputFile.length() > 0;
       if (!hasCover) {
+        final explicitNoCover = result['error']?.toString().contains(
+          'no cover art found in file',
+        ) ?? false;
+        if (explicitNoCover) {
+          _confirmedWithoutEmbeddedCover.add(cleanPath);
+          _notifyCoverChanged(job);
+        }
         _rememberFailedExtract(cleanPath);
         if (job.forceRefresh) {
           final previous = _cache.remove(cleanPath);
@@ -730,6 +749,7 @@ class DownloadedEmbeddedCoverResolver {
       );
       _touch(cleanPath, next);
       _failedExtract.remove(cleanPath);
+      _confirmedWithoutEmbeddedCover.remove(cleanPath);
       _trimCacheIfNeeded();
 
       if (previous != null && previous.previewPath != finalPath) {

@@ -496,11 +496,8 @@ class _LibrarySearchResultsState extends ConsumerState<LibrarySearchResults> {
                       : fallback(context),
                 )
               : hit.cover?.isNotEmpty == true
-                  ? LocalOrNetworkCoverImage(
-                      url: hit.cover!,
-                      placeholder: fallback,
-                    )
-                  : fallback(context),
+              ? LocalOrNetworkCoverImage(url: hit.cover!, placeholder: fallback)
+              : fallback(context),
         ),
       ),
       title: hit.title,

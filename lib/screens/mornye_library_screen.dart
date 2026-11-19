@@ -889,9 +889,11 @@ class _LibraryBrowseArtworkState extends State<_LibraryBrowseArtwork> {
     );
     final cover = isFlac
         ? embedded ??
-            (DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(entry.samplePath)
-                ? entry.cover
-                : null)
+              (DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(
+                    entry.samplePath,
+                  )
+                  ? entry.cover
+                  : null)
         : (entry.cover ?? embedded);
     return cover == null
         ? fallback(context)

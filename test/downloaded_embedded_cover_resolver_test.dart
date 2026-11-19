@@ -57,7 +57,10 @@ void main() {
   });
 
   test('only actual local FLAC paths override provider artwork', () {
-    expect(DownloadedEmbeddedCoverResolver.isLocalFlac('/music/song.flac'), isTrue);
+    expect(
+      DownloadedEmbeddedCoverResolver.isLocalFlac('/music/song.flac'),
+      isTrue,
+    );
     expect(
       DownloadedEmbeddedCoverResolver.isLocalFlac(
         'content://example.documents/song.flac',
@@ -65,9 +68,7 @@ void main() {
       isTrue,
     );
     expect(
-      DownloadedEmbeddedCoverResolver.isLocalFlac(
-        'network://share/song.flac',
-      ),
+      DownloadedEmbeddedCoverResolver.isLocalFlac('network://share/song.flac'),
       isFalse,
     );
     expect(
@@ -76,7 +77,10 @@ void main() {
       ),
       isFalse,
     );
-    expect(DownloadedEmbeddedCoverResolver.isLocalFlac('/music/song.mp3'), isFalse);
+    expect(
+      DownloadedEmbeddedCoverResolver.isLocalFlac('/music/song.mp3'),
+      isFalse,
+    );
   });
 
   test('metadata artwork prefers embedded, then local, then remote', () {

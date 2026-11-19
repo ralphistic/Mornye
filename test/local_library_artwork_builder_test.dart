@@ -68,8 +68,9 @@ void main() {
           await File(args['output_path']! as String).writeAsBytes([7, 8, 9]);
           return jsonEncode({'success': true});
         });
-    final extracted =
-        await DownloadedEmbeddedCoverResolver.resolveOrExtract(flac.path);
+    final extracted = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+      flac.path,
+    );
     expect(extracted, isNotNull);
     expect(await File(extracted!).readAsBytes(), [7, 8, 9]);
 

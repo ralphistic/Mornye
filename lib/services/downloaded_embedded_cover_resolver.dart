@@ -705,9 +705,11 @@ class DownloadedEmbeddedCoverResolver {
           await outputFile.exists() &&
           await outputFile.length() > 0;
       if (!hasCover) {
-        final explicitNoCover = result['error']?.toString().contains(
-          'no cover art found in file',
-        ) ?? false;
+        final explicitNoCover =
+            result['error']?.toString().contains(
+              'no cover art found in file',
+            ) ??
+            false;
         if (explicitNoCover) {
           _confirmedWithoutEmbeddedCover.add(cleanPath);
           _notifyCoverChanged(job);

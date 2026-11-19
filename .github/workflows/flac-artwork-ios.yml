@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/flac-artwork-scan
+      - fix/artwork-consistency-audit
   workflow_dispatch:
 
 permissions:

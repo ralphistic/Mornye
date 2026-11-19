@@ -1,12 +1,15 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/widgets.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
 import 'package:mornye/widgets/local_library_artwork_builder.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  const backendChannel = MethodChannel('com.zarz.mornye/backend');
   late Directory directory;
 
   setUp(() async {
@@ -21,6 +24,8 @@ void main() {
       preservePersistentFiles: false,
     );
     DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(backendChannel, null);
     await directory.delete(recursive: true);
   });
 
@@ -47,6 +52,43 @@ void main() {
       ),
     );
     expect(shown, isNull);
+  });
+
+  testWidgets('FLAC uses extracted picture rather than existing scan image', (
+    tester,
+  ) async {
+    final stale = File('${directory.path}/old.png');
+    await stale.writeAsBytes([1, 2, 3]);
+    final flac = File('${directory.path}/edited.flac');
+    await flac.writeAsBytes([4, 5, 6]);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(backendChannel, (call) async {
+          expect(call.method, 'extractCoverToFile');
+          final args = call.arguments as Map<Object?, Object?>;
+          await File(args['output_path']! as String).writeAsBytes([7, 8, 9]);
+          return jsonEncode({'success': true});
+        });
+    final extracted =
+        await DownloadedEmbeddedCoverResolver.resolveOrExtract(flac.path);
+    expect(extracted, isNotNull);
+    expect(await File(extracted!).readAsBytes(), [7, 8, 9]);
+
+    String? shown;
+    await tester.pumpWidget(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: LocalLibraryArtworkBuilder(
+          coverPath: stale.path,
+          filePath: flac.path,
+          builder: (_, cover) {
+            shown = cover;
+            return const SizedBox();
+          },
+        ),
+      ),
+    );
+    expect(shown, extracted);
+    expect(shown, isNot(stale.path));
   });
 
   testWidgets('non-FLAC files retain the scanned cover fallback', (

@@ -86,8 +86,9 @@ void main() {
           return jsonEncode({'success': true});
         });
     final extracted = await tester.runAsync(
-      () => DownloadedEmbeddedCoverResolver.resolveOrExtract(flac.path)
-          .timeout(const Duration(seconds: 10)),
+      () => DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        flac.path,
+      ).timeout(const Duration(seconds: 10)),
     );
     expect(extracted, isNotNull);
     expect(await tester.runAsync(() => File(extracted!).readAsBytes()), [

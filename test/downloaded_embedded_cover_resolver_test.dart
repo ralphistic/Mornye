@@ -82,6 +82,24 @@ void main() {
     expect(resolveMetadataArtworkSource(), isNull);
   });
 
+  test('only explicit missing embedded art permits scanned fallback', () async {
+    final source = await createAudioFixture('no-picture');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(backendChannel, (call) async {
+          expect(call.method, 'extractCoverToFile');
+          return jsonEncode({
+            'error': 'failed to extract cover: no cover art found in file',
+          });
+        });
+    expect(
+      await DownloadedEmbeddedCoverResolver.resolveOrExtract(source),
+      isNull,
+    );
+    expect(DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(source), isTrue);
+    await DownloadedEmbeddedCoverResolver.invalidate(source);
+    expect(DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(source), isFalse);
+  });
+
   test(
     'a temporarily offline SAF cover retries after cooldown without restarting',
     () async {

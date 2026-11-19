@@ -12,7 +12,10 @@ Future<String?> resolveEmbeddedArtworkUri(
     return null;
   }
   try {
-    if (artwork != null && artwork.isNotEmpty) {
+    // FLAC's embedded picture is authoritative even when a stale scanned
+    // thumbnail still exists. Other formats retain the existing fast path.
+    final isFlac = source.toLowerCase().split('?').first.endsWith('.flac');
+    if (!isFlac && artwork != null && artwork.isNotEmpty) {
       final uri = Uri.parse(artwork);
       final remote = uri.scheme == 'http' || uri.scheme == 'https';
       if (uri.hasScheme && uri.scheme != 'file' && !remote) return null;

@@ -659,9 +659,9 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
         errorBuilder: (_, _, _) => _fallback(),
       );
     } else if (!(widget.downloadedFilePath != null &&
-            DownloadedEmbeddedCoverResolver.cleanFilePath(
+            DownloadedEmbeddedCoverResolver.isLocalFlac(
               widget.downloadedFilePath,
-            ).toLowerCase().endsWith('.flac') &&
+            ) &&
             !DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(
               widget.downloadedFilePath,
             )) &&

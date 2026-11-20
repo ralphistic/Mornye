@@ -92,6 +92,7 @@ void main() {
   ) async {
     await openSheet(tester);
     await tester.tap(find.text('Choose from Files'));
+    await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
     expect(calls, ['pickIosDirectory']);
     expect(selection?.path, '/external/Music');
@@ -112,6 +113,7 @@ void main() {
     });
     await openSheet(tester);
     await tester.tap(find.text('Choose from Files'));
+    await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
     expect(calls, ['pickIosDirectory']);
     expect(selection?.path, custom.path);
@@ -137,6 +139,7 @@ void main() {
     messenger.setMockMethodCallHandler(backend, (_) async => null);
     await openSheet(tester);
     await tester.tap(find.text('Choose from Files'));
+    await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
     expect(selection, isNull);
     expect(failure, isNull);
@@ -151,6 +154,7 @@ void main() {
     });
     await openSheet(tester);
     await tester.tap(find.text('Choose from Files'));
+    await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
     expect(selection, isNull);
     expect(failure, isA<PlatformException>());

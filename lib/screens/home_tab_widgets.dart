@@ -612,7 +612,7 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
 
   String? _resolveEmbeddedCoverPath() {
     final filePath = widget.downloadedFilePath;
-    if (filePath == null || filePath.isEmpty) return null;
+    if (filePath == null || filePath.isEmpty) return widget.imageUrl;
     return DownloadedEmbeddedCoverResolver.resolveDisplayCover(
       filePath,
       fallback: widget.imageUrl,

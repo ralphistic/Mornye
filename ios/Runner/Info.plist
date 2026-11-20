@@ -123,8 +123,6 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
-	<key>UISupportsDocumentBrowser</key>
-	<true/>
 	
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Mornye needs access to save album artwork</string>

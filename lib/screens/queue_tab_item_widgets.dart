@@ -803,7 +803,10 @@ extension _QueueTabItemWidgets on _QueueTabState {
       return SizedBox(width: size, height: size, child: animated);
     }
 
-    if (isDownloaded) {
+    // Local FLACs must use the same embedded-art authority as downloads.
+    // Otherwise scanned songs fall through to a stale cover URL or thumbnail.
+    if (isDownloaded ||
+        DownloadedEmbeddedCoverResolver.isLocalFlac(item.filePath)) {
       final embeddedCoverPath = _resolveDownloadedEmbeddedCoverPath(
         item.filePath,
       );

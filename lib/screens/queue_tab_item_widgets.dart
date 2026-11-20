@@ -697,7 +697,9 @@ extension _QueueTabItemWidgets on _QueueTabState {
     final badgeInset = size == null ? 4.0 : 0.0;
 
     // Scanned SAF tracks also recover artwork after a transient provider error.
-    if (isDownloaded || item.filePath.startsWith('content://')) {
+    if (isDownloaded ||
+        item.filePath.startsWith('content://') ||
+        DownloadedEmbeddedCoverResolver.isLocalFlac(item.filePath)) {
       return OfflineAvailabilityCover(
         item: item,
         inset: badgeInset,
@@ -826,6 +828,13 @@ extension _QueueTabItemWidgets on _QueueTabState {
           ),
         );
       }
+    }
+
+    // Do not substitute a potentially outdated library/remote thumbnail
+    // while a FLAC's embedded artwork is still being extracted.
+    if (DownloadedEmbeddedCoverResolver.isLocalFlac(item.filePath) &&
+        !DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(item.filePath)) {
+      return buildPlaceholder(isLocal: !isDownloaded);
     }
 
     if (item.coverUrl != null) {

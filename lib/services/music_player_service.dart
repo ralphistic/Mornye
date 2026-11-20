@@ -384,7 +384,13 @@ class MusicPlayerHandler extends BaseAudioHandler
       unknownArtist: _runtime.unknownArtist,
       covers: _dependencies.coverStore,
     );
+    // Scanned or stored thumbnails may predate the FLAC's embedded picture.
+    // Keep Now Playing blank until the authoritative extraction completes,
+    // rather than briefly showing a different old cover.
     return item.copyWith(
+      artUri: DownloadedEmbeddedCoverResolver.isLocalFlac(media.source)
+          ? null
+          : item.artUri,
       extras: {...?item.extras, 'playbackInstance': _playbackInstance},
     );
   }

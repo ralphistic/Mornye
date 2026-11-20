@@ -1,5 +1,10 @@
 part of 'queue_tab.dart';
 
+bool _isArtworkHttpUrl(String source) {
+  final uri = Uri.tryParse(source);
+  return uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+}
+
 extension _QueueTabItemWidgets on _QueueTabState {
   Widget _buildSelectionBottomBar(
     BuildContext context,
@@ -815,7 +820,7 @@ extension _QueueTabItemWidgets on _QueueTabState {
               onChanged: _onEmbeddedCoverChanged,
             )
           : _resolveDownloadedEmbeddedCoverPath(item.filePath);
-      if (embeddedCoverPath != null && !isHttpCoverUrl(embeddedCoverPath)) {
+      if (embeddedCoverPath != null && !_isArtworkHttpUrl(embeddedCoverPath)) {
         return ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: Image.file(

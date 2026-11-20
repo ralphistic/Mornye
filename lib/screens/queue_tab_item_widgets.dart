@@ -805,14 +805,17 @@ extension _QueueTabItemWidgets on _QueueTabState {
       return SizedBox(width: size, height: size, child: animated);
     }
 
-    // Local FLACs must use the same embedded-art authority as downloads.
-    // Otherwise scanned songs fall through to a stale cover URL or thumbnail.
-    if (isDownloaded ||
-        DownloadedEmbeddedCoverResolver.isLocalFlac(item.filePath)) {
-      final embeddedCoverPath = _resolveDownloadedEmbeddedCoverPath(
-        item.filePath,
-      );
-      if (embeddedCoverPath != null) {
+    // The same authoritative FLAC policy is used by Home and the Library.
+    final isFlac = DownloadedEmbeddedCoverResolver.isLocalFlac(item.filePath);
+    if (isDownloaded || isFlac) {
+      final embeddedCoverPath = isFlac
+          ? DownloadedEmbeddedCoverResolver.resolveDisplayCover(
+              item.filePath,
+              fallback: item.coverUrl ?? item.localCoverPath,
+              onChanged: _onEmbeddedCoverChanged,
+            )
+          : _resolveDownloadedEmbeddedCoverPath(item.filePath);
+      if (embeddedCoverPath != null && !isHttpCoverUrl(embeddedCoverPath)) {
         return ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: Image.file(
@@ -832,7 +835,7 @@ extension _QueueTabItemWidgets on _QueueTabState {
 
     // Do not substitute a potentially outdated library/remote thumbnail
     // while a FLAC's embedded artwork is still being extracted.
-    if (DownloadedEmbeddedCoverResolver.isLocalFlac(item.filePath) &&
+    if (isFlac &&
         !DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(item.filePath)) {
       return buildPlaceholder(isLocal: !isDownloaded);
     }

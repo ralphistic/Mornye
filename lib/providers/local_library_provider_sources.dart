@@ -129,10 +129,9 @@ extension _LocalLibrarySources on LocalLibraryNotifier {
     _isLoaded = true;
   }
 
-  /// Moves the one folder of builds before multiple folders into the folder
-  /// list, once: the old setting is cleared afterwards. Every reload runs
-  /// this, including the one after each metadata save, so a setting left
-  /// behind would bring a removed folder back as offline.
+  /// Imports a legacy single-folder preference into the multi-source database
+  /// only if the source is not already present. The preference also mirrors
+  /// the last selected iOS folder; removing it clears that preference.
   Future<void> _migrateLegacySource() async {
     final settings = ref.read(settingsProvider);
     final path = settings.localLibraryPath.trim();

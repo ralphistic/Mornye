@@ -546,6 +546,11 @@ class _CollectionItemWidget extends StatelessWidget {
   }
 }
 
+bool _isArtworkHttpUrl(String source) {
+  final uri = Uri.tryParse(source);
+  return uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+}
+
 class _DownloadedOrRemoteCover extends StatefulWidget {
   final String? downloadedFilePath;
   final String? imageUrl;
@@ -647,7 +652,7 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
     final cacheHeight = (widget.height * 2).round();
 
     Widget child;
-    if (_embeddedCoverPath != null && !isHttpCoverUrl(_embeddedCoverPath)) {
+    if (_embeddedCoverPath != null && !_isArtworkHttpUrl(_embeddedCoverPath)) {
       child = Image.file(
         File(_embeddedCoverPath!),
         width: widget.width,
@@ -660,7 +665,7 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
         errorBuilder: (_, _, _) => _fallback(),
       );
     } else if (_embeddedCoverPath != null &&
-        isHttpCoverUrl(_embeddedCoverPath)) {
+        _isArtworkHttpUrl(_embeddedCoverPath)) {
       child = CachedCoverImage(
         imageUrl: _embeddedCoverPath!,
         width: widget.width,

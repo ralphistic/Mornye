@@ -168,6 +168,35 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
        _networkStorage = networkStorage ?? NetworkStorageService.instance,
        _availabilityProbe = availabilityProbe;
 
+  // Keep Files security scopes open while indexed tracks can be played.
+  // A scan-only lease ends before the player reads the selected audio files.
+  final Map<String, (String, IosSecurityScopedAccess)> _iosLibraryLeases = {};
+
+  Future<void> _retainIosLibraryAccess(LocalLibrarySource source) async {
+    if (!Platform.isIOS || source.bookmark == null ||
+        source.bookmark!.isEmpty) return;
+    final existing = _iosLibraryLeases[source.id];
+    if (existing?.$1 == source.bookmark) return;
+    final access = await PlatformBridge.startAccessingIosBookmark(
+      source.bookmark!,
+    );
+    if (access == null) {
+      _log.w('Cannot restore iOS Files access for ${source.displayName}');
+      return;
+    }
+    _iosLibraryLeases[source.id] = (source.bookmark!, access);
+    if (existing != null) {
+      await PlatformBridge.stopAccessingIosBookmark(existing.$2);
+    }
+  }
+
+  Future<void> _releaseIosLibraryAccess(String sourceId) async {
+    final lease = _iosLibraryLeases.remove(sourceId);
+    if (lease != null) {
+      await PlatformBridge.stopAccessingIosBookmark(lease.$2);
+    }
+  }
+
   final LibraryDatabase _db;
   final NetworkStorageService _networkStorage;
   void Function()? _unsubscribeNetworkRemoval;
@@ -233,6 +262,9 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
     );
     ref.onDispose(() {
       _unsubscribeNetworkRemoval?.call();
+      for (final sourceId in _iosLibraryLeases.keys.toList()) {
+        unawaited(_releaseIosLibraryAccess(sourceId));
+      }
       _scanCancelRequested = true;
       _scanPauseRequested = false;
       _pendingReconnectScans.clear();
@@ -307,6 +339,12 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
       state = state.copyWith(sources: configuredSources);
       await ref.read(settingsProvider.notifier).ensureLoaded();
       await _migrateLegacySource();
+      if (Platform.isIOS) {
+        for (final source in await _db.getSources()) {
+          if (!ref.mounted) return;
+          await _retainIosLibraryAccess(source);
+        }
+      }
       final reconnectedSources = await _refreshSourceAvailabilityInDatabase();
       while (ref.mounted) {
         final sourceVersion = _sourceVersion;
@@ -424,6 +462,7 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
       );
       _sourceVersion++;
       await _db.upsertSource(refreshed);
+      await _retainIosLibraryAccess(refreshed);
       await _refreshSummaryFromStorage();
       if (Platform.isIOS && ref.mounted) {
         ref
@@ -451,6 +490,7 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
     );
     _sourceVersion++;
     await _db.upsertSource(source);
+    await _retainIosLibraryAccess(source);
     await _refreshSummaryFromStorage();
     if (Platform.isIOS && ref.mounted) {
       ref
@@ -485,6 +525,7 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
     _pendingReconnectScans.remove(sourceId);
     await _cancelSourceScan(sourceId);
     await _db.removeSource(sourceId);
+    await _releaseIosLibraryAccess(sourceId);
     await _setScanFailures(sourceId, null);
     await _refreshSummaryFromStorage();
     if (Platform.isIOS && ref.mounted && removed?.path == selectedPath) {
@@ -775,6 +816,9 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
   Future<void> clearLibrary() async {
     _sourceVersion++;
     await _db.clearAll();
+    for (final sourceId in _iosLibraryLeases.keys.toList()) {
+      await _releaseIosLibraryAccess(sourceId);
+    }
     if (Platform.isIOS && ref.mounted) {
       ref
           .read(settingsProvider.notifier)

@@ -37,7 +37,10 @@ void main() {
       artist: 'Artist',
       artUri: 'file:///cache/old-design.jpg',
     );
-    expect(local.toMediaItem().artUri, Uri.parse('file:///cache/old-design.jpg'));
+    expect(
+      local.toMediaItem().artUri,
+      Uri.parse('file:///cache/old-design.jpg'),
+    );
     expect(local.toMediaItem(suppressArtwork: true).artUri, isNull);
     expect(
       local.toMediaItem(suppressArtwork: true).extras?['source'],

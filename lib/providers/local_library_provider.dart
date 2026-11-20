@@ -173,8 +173,8 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
   final Map<String, (String, IosSecurityScopedAccess)> _iosLibraryLeases = {};
 
   Future<void> _retainIosLibraryAccess(LocalLibrarySource source) async {
-    if (!Platform.isIOS || source.bookmark == null ||
-        source.bookmark!.isEmpty) return;
+    if (!Platform.isIOS || source.bookmark == null || source.bookmark!.isEmpty)
+      return;
     final existing = _iosLibraryLeases[source.id];
     if (existing?.$1 == source.bookmark) return;
     final access = await PlatformBridge.startAccessingIosBookmark(

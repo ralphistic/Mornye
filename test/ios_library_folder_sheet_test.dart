@@ -99,6 +99,26 @@ void main() {
     expect(failure, isNull);
   });
 
+  testWidgets('custom Files folder selection keeps music in place', (
+    tester,
+  ) async {
+    final custom = Directory('${root.path}/On My iPhone/Mornye Test Folder');
+    custom.createSync(recursive: true);
+    final track = File('${custom.path}/sample.flac')..writeAsBytesSync([7, 8, 9]);
+    messenger.setMockMethodCallHandler(backend, (call) async {
+      calls.add(call.method);
+      return {'path': custom.path, 'bookmark': 'folder-grant'};
+    });
+    await openSheet(tester);
+    await tester.tap(find.text('Choose from Files'));
+    await tester.pumpAndSettle();
+    expect(calls, ['pickIosDirectory']);
+    expect(selection?.path, custom.path);
+    expect(selection?.bookmark, 'folder-grant');
+    expect(track.readAsBytesSync(), [7, 8, 9]);
+    expect(failure, isNull);
+  });
+
   testWidgets('dismissing the choice does not select or create a folder', (
     tester,
   ) async {

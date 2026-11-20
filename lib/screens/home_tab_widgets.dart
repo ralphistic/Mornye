@@ -608,8 +608,9 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
   String? _resolveEmbeddedCoverPath() {
     final filePath = widget.downloadedFilePath;
     if (filePath == null || filePath.isEmpty) return null;
-    return DownloadedEmbeddedCoverResolver.resolve(
+    return DownloadedEmbeddedCoverResolver.resolveDisplayCover(
       filePath,
+      fallback: widget.imageUrl,
       onChanged: _onEmbeddedCoverChanged,
     );
   }
@@ -646,7 +647,8 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
     final cacheHeight = (widget.height * 2).round();
 
     Widget child;
-    if (_embeddedCoverPath != null) {
+    if (_embeddedCoverPath != null &&
+        !isHttpCoverUrl(_embeddedCoverPath)) {
       child = Image.file(
         File(_embeddedCoverPath!),
         width: widget.width,
@@ -658,17 +660,10 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
         filterQuality: FilterQuality.low,
         errorBuilder: (_, _, _) => _fallback(),
       );
-    } else if (!(widget.downloadedFilePath != null &&
-            DownloadedEmbeddedCoverResolver.isLocalFlac(
-              widget.downloadedFilePath,
-            ) &&
-            !DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(
-              widget.downloadedFilePath,
-            )) &&
-        widget.imageUrl != null &&
-        widget.imageUrl!.isNotEmpty) {
+    } else if (_embeddedCoverPath != null &&
+        isHttpCoverUrl(_embeddedCoverPath)) {
       child = CachedCoverImage(
-        imageUrl: widget.imageUrl!,
+        imageUrl: _embeddedCoverPath!,
         width: widget.width,
         height: widget.height,
         fit: BoxFit.cover,

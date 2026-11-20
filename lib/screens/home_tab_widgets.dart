@@ -654,7 +654,7 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
         fit: BoxFit.cover,
         cacheWidth: cacheWidth,
         cacheHeight: cacheHeight,
-        gaplessPlayback: true,
+        gaplessPlayback: false,
         filterQuality: FilterQuality.low,
         errorBuilder: (_, _, _) => _fallback(),
       );

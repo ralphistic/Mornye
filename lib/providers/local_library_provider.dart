@@ -426,9 +426,12 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
       await _db.upsertSource(refreshed);
       await _refreshSummaryFromStorage();
       if (Platform.isIOS && ref.mounted) {
-        ref.read(settingsProvider.notifier).setLocalLibraryPathAndBookmark(
-          refreshed.path, refreshed.bookmark ?? '',
-        );
+        ref
+            .read(settingsProvider.notifier)
+            .setLocalLibraryPathAndBookmark(
+              refreshed.path,
+              refreshed.bookmark ?? '',
+            );
       }
       return refreshed;
     }
@@ -450,9 +453,9 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
     await _db.upsertSource(source);
     await _refreshSummaryFromStorage();
     if (Platform.isIOS && ref.mounted) {
-      ref.read(settingsProvider.notifier).setLocalLibraryPathAndBookmark(
-        source.path, source.bookmark ?? '',
-      );
+      ref
+          .read(settingsProvider.notifier)
+          .setLocalLibraryPathAndBookmark(source.path, source.bookmark ?? '');
     }
     return source;
   }
@@ -475,7 +478,9 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
 
   Future<void> removeSource(String sourceId) async {
     final selectedPath = ref.read(settingsProvider).localLibraryPath;
-    final removed = state.sources.where((source) => source.id == sourceId).firstOrNull;
+    final removed = state.sources
+        .where((source) => source.id == sourceId)
+        .firstOrNull;
     _sourceVersion++;
     _pendingReconnectScans.remove(sourceId);
     await _cancelSourceScan(sourceId);
@@ -483,7 +488,9 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
     await _setScanFailures(sourceId, null);
     await _refreshSummaryFromStorage();
     if (Platform.isIOS && ref.mounted && removed?.path == selectedPath) {
-      ref.read(settingsProvider.notifier).setLocalLibraryPathAndBookmark('', '');
+      ref
+          .read(settingsProvider.notifier)
+          .setLocalLibraryPathAndBookmark('', '');
     }
   }
 
@@ -769,7 +776,9 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
     _sourceVersion++;
     await _db.clearAll();
     if (Platform.isIOS && ref.mounted) {
-      ref.read(settingsProvider.notifier).setLocalLibraryPathAndBookmark('', '');
+      ref
+          .read(settingsProvider.notifier)
+          .setLocalLibraryPathAndBookmark('', '');
     }
 
     try {

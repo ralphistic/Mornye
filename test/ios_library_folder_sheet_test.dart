@@ -104,7 +104,8 @@ void main() {
   ) async {
     final custom = Directory('${root.path}/On My iPhone/Mornye Test Folder');
     custom.createSync(recursive: true);
-    final track = File('${custom.path}/sample.flac')..writeAsBytesSync([7, 8, 9]);
+    final track = File('${custom.path}/sample.flac')
+      ..writeAsBytesSync([7, 8, 9]);
     messenger.setMockMethodCallHandler(backend, (call) async {
       calls.add(call.method);
       return {'path': custom.path, 'bookmark': 'folder-grant'};

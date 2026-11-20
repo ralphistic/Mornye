@@ -2213,6 +2213,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       media.artUri,
       extract: (source) => DownloadedEmbeddedCoverResolver.resolveOrExtract(
         source,
+        requireFreshExtraction: true,
         onChanged: () {
           if (initialResolutionComplete &&
               _isCurrentPlayRequest(generation, media)) {

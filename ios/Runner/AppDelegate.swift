@@ -718,10 +718,20 @@ import UniformTypeIdentifiers
             topController = presented
         }
         pendingDirectoryPickerResult = result
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.folder])
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: [UTType.folder],
+            asCopy: false
+        )
         picker.delegate = self
         picker.allowsMultipleSelection = false
-        topController.present(picker, animated: true)
+        // Present as a standalone Files browser, not an adaptive sheet over
+        // Flutter's recently dismissed selection sheet. On some iOS versions
+        // the nested presentation leaves the Files "Open" action unresponsive.
+        picker.modalPresentationStyle = .fullScreen
+        NSLog("Mornye: presenting iOS folder picker")
+        topController.present(picker, animated: true) {
+            NSLog("Mornye: iOS folder picker presentation completed")
+        }
     }
 
     // MARK: - iOS Security-Scoped Bookmark Helpers
@@ -809,6 +819,7 @@ extension AppDelegate: UIDocumentPickerDelegate {
         _ controller: UIDocumentPickerViewController,
         didPickDocumentsAt urls: [URL]
     ) {
+        NSLog("Mornye: folder picker didPickDocumentsAt count=\(urls.count)")
         guard let result = pendingDirectoryPickerResult else { return }
         pendingDirectoryPickerResult = nil
         guard let url = urls.first else {
@@ -843,6 +854,7 @@ extension AppDelegate: UIDocumentPickerDelegate {
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        NSLog("Mornye: folder picker cancelled")
         pendingDirectoryPickerResult?(nil)
         pendingDirectoryPickerResult = nil
     }

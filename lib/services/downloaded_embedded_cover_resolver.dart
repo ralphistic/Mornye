@@ -133,6 +133,21 @@ class DownloadedEmbeddedCoverResolver {
             p.windows.isAbsolute(path));
   }
 
+  /// Single display policy for a local FLAC: its embedded picture wins over
+  /// provider artwork and scan thumbnails. While extraction is pending, show
+  /// no substitute image; a stale fallback would misrepresent the file.
+  /// Other audio formats keep their normal artwork source.
+  static String? resolveDisplayCover(
+    String? filePath, {
+    String? fallback,
+    VoidCallback? onChanged,
+  }) {
+    if (!isLocalFlac(filePath)) return fallback;
+    final embedded = resolve(filePath, onChanged: onChanged);
+    if (embedded != null) return embedded;
+    return hasNoEmbeddedCover(filePath) ? fallback : null;
+  }
+
   static Future<int?> readFileModTimeMillis(String? filePath) async {
     final cleanPath = cleanFilePath(filePath);
     if (cleanPath.isEmpty) return null;

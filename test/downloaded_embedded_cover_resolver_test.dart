@@ -554,6 +554,55 @@ void main() {
   );
 
   test(
+    'playback-style cached resolveOrExtract reports a changed embedded cover',
+    () async {
+      var now = DateTime.utc(2026);
+      DownloadedEmbeddedCoverResolver.setValidationClockForTesting(() => now);
+      const source = 'content://covers/document/playback-refresh';
+      var modTime = 1000;
+      var cover = <int>[1, 2, 3];
+      var notifications = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(backendChannel, (call) async {
+            if (call.method == 'getSafFileModTimes') {
+              return jsonEncode({source: modTime});
+            }
+            expect(call.method, 'extractCoverToFile');
+            await File(
+              (call.arguments as Map)['output_path'] as String,
+            ).writeAsBytes(cover);
+            return jsonEncode({'success': true});
+          });
+
+      final original = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        source,
+      );
+      expect(original, isNotNull);
+      // First validation establishes the interval; then an external retag
+      // changes both the source timestamp and embedded picture.
+      await DownloadedEmbeddedCoverResolver.resolveOrExtract(source);
+      await DownloadedEmbeddedCoverResolver.waitForPreviewValidationForTesting();
+      now = now.add(const Duration(seconds: 5));
+      modTime = 2000;
+      cover = <int>[9, 8, 7];
+
+      final initiallyCached =
+          await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+            source,
+            onChanged: () => notifications++,
+          );
+      expect(initiallyCached, original);
+      await DownloadedEmbeddedCoverResolver.waitForPreviewValidationForTesting();
+      expect(notifications, 1);
+      final refreshed = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        source,
+      );
+      expect(refreshed, isNot(original));
+      expect(await File(refreshed!).readAsBytes(), cover);
+    },
+  );
+
+  test(
     'invalidation during a pending validation cannot restore stale artwork',
     () async {
       const path = 'content://covers/document/invalidation';

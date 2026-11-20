@@ -425,6 +425,11 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
       _sourceVersion++;
       await _db.upsertSource(refreshed);
       await _refreshSummaryFromStorage();
+      if (Platform.isIOS && ref.mounted) {
+        ref.read(settingsProvider.notifier).setLocalLibraryPathAndBookmark(
+          refreshed.path, refreshed.bookmark ?? '',
+        );
+      }
       return refreshed;
     }
 
@@ -444,6 +449,11 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
     _sourceVersion++;
     await _db.upsertSource(source);
     await _refreshSummaryFromStorage();
+    if (Platform.isIOS && ref.mounted) {
+      ref.read(settingsProvider.notifier).setLocalLibraryPathAndBookmark(
+        source.path, source.bookmark ?? '',
+      );
+    }
     return source;
   }
 
@@ -464,12 +474,17 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
   }
 
   Future<void> removeSource(String sourceId) async {
+    final selectedPath = ref.read(settingsProvider).localLibraryPath;
+    final removed = state.sources.where((source) => source.id == sourceId).firstOrNull;
     _sourceVersion++;
     _pendingReconnectScans.remove(sourceId);
     await _cancelSourceScan(sourceId);
     await _db.removeSource(sourceId);
     await _setScanFailures(sourceId, null);
     await _refreshSummaryFromStorage();
+    if (Platform.isIOS && ref.mounted && removed?.path == selectedPath) {
+      ref.read(settingsProvider.notifier).setLocalLibraryPathAndBookmark('', '');
+    }
   }
 
   Future<void> _cancelSourceScan(String sourceId) async {
@@ -753,6 +768,9 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
   Future<void> clearLibrary() async {
     _sourceVersion++;
     await _db.clearAll();
+    if (Platform.isIOS && ref.mounted) {
+      ref.read(settingsProvider.notifier).setLocalLibraryPathAndBookmark('', '');
+    }
 
     try {
       final prefs = await SharedPreferences.getInstance();

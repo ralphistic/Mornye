@@ -29,6 +29,22 @@ void main() {
       );
     },
   );
+  test('local FLAC initial playback can suppress stale scan artwork', () {
+    const local = PlayableMedia(
+      id: '/music/edited.flac',
+      source: '/music/edited.flac',
+      title: 'Edited',
+      artist: 'Artist',
+      artUri: 'file:///cache/old-design.jpg',
+    );
+    expect(local.toMediaItem().artUri, Uri.parse('file:///cache/old-design.jpg'));
+    expect(local.toMediaItem(suppressArtwork: true).artUri, isNull);
+    expect(
+      local.toMediaItem(suppressArtwork: true).extras?['source'],
+      '/music/edited.flac',
+    );
+  });
+
   const media = PlayableMedia(
     id: 'track-1',
     source: '/music/track.flac',

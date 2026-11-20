@@ -2204,12 +2204,24 @@ class MusicPlayerHandler extends BaseAudioHandler
       }
       if (!_isCurrentPlayRequest(generation, media)) return;
     }
+    // A cached preview can be replaced after its asynchronous source check.
+    // Re-resolve the active track when that happens; otherwise Now Playing
+    // continues to hold the obsolete preview path even after Library updates.
+    var initialResolutionComplete = false;
     final artwork = await resolveEmbeddedArtworkUri(
       media.source,
       media.artUri,
-      extract: (source) =>
-          DownloadedEmbeddedCoverResolver.resolveOrExtract(source),
+      extract: (source) => DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        source,
+        onChanged: () {
+          if (initialResolutionComplete &&
+              _isCurrentPlayRequest(generation, media)) {
+            unawaited(_recoverEmbeddedArtwork(media, generation));
+          }
+        },
+      ),
     );
+    initialResolutionComplete = true;
     if (artwork == null || !_isCurrentPlayRequest(generation, media)) return;
     final current = mediaItem.value;
     if (current == null) return;

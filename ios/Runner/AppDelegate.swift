@@ -39,6 +39,15 @@ import UniformTypeIdentifiers
     private var securityScopedAccesses: [String: (URL, CoreDirectoryScope)] = [:]
 
     private var pendingDirectoryPickerResult: FlutterResult?
+    private var directoryPickerWindow: UIWindow?
+    private weak var previousKeyWindow: UIWindow?
+
+    private func finishDirectoryPickerPresentation() {
+        directoryPickerWindow?.isHidden = true
+        directoryPickerWindow = nil
+        previousKeyWindow?.makeKeyAndVisible()
+        previousKeyWindow = nil
+    }
     private var audioOpenChannel: FlutterMethodChannel?
     private var pendingAudio: [[String]] = []
     private var audioOpenReady = false
@@ -706,33 +715,36 @@ import UniformTypeIdentifiers
             ))
             return
         }
-        guard var topController = activeWindow?.rootViewController else {
+        guard let scene = activeWindow?.windowScene else {
             result(FlutterError(
-                code: "NO_VIEW_CONTROLLER",
-                message: "No view controller available to present the folder picker",
+                code: "NO_WINDOW_SCENE",
+                message: "No active iOS window scene available for folder selection",
                 details: nil
             ))
             return
         }
-        while let presented = topController.presentedViewController {
-            topController = presented
-        }
+        // Host Files on a separate UIKit window. The Flutter view hierarchy
+        // otherwise remains the presenting controller for the remote Files UI;
+        // on affected devices Open acknowledges the tap but never completes.
+        previousKeyWindow = activeWindow
+        let hostWindow = UIWindow(windowScene: scene)
+        hostWindow.windowLevel = .alert + 1
+        let host = UIViewController()
+        host.view.backgroundColor = .clear
+        hostWindow.rootViewController = host
+        directoryPickerWindow = hostWindow
+        hostWindow.makeKeyAndVisible()
+
         pendingDirectoryPickerResult = result
         let picker = UIDocumentPickerViewController(
             forOpeningContentTypes: [UTType.folder],
             asCopy: false
         )
         picker.delegate = self
-        // Multi-selection caused the Files picker to spin indefinitely on
-        // real devices. Use the standard single-folder open configuration.
         picker.allowsMultipleSelection = false
-        // Present as a standalone Files browser, not an adaptive sheet over
-        // Flutter's recently dismissed selection sheet. On some iOS versions
-        // the nested presentation leaves the Files "Open" action unresponsive.
         picker.modalPresentationStyle = .fullScreen
-        NSLog("Mornye: presenting iOS folder picker")
-        topController.present(picker, animated: true) {
-            NSLog("Mornye: iOS folder picker presentation completed")
+        host.present(picker, animated: true) {
+            NSLog("Mornye: isolated folder picker presented")
         }
     }
 
@@ -822,6 +834,7 @@ extension AppDelegate: UIDocumentPickerDelegate {
         didPickDocumentsAt urls: [URL]
     ) {
         NSLog("Mornye: folder picker didPickDocumentsAt count=\(urls.count)")
+        finishDirectoryPickerPresentation()
         guard let result = pendingDirectoryPickerResult else { return }
         pendingDirectoryPickerResult = nil
         guard let url = urls.first else {
@@ -857,6 +870,7 @@ extension AppDelegate: UIDocumentPickerDelegate {
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
         NSLog("Mornye: folder picker cancelled")
+        finishDirectoryPickerPresentation()
         pendingDirectoryPickerResult?(nil)
         pendingDirectoryPickerResult = nil
     }

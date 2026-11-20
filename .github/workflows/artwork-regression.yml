@@ -30,7 +30,7 @@ jobs:
         run: flutter pub get
       - name: Format and commit exact source under test
         run: |
-          dart format lib/widgets/local_library_artwork_builder.dart lib/screens/home_tab_widgets.dart lib/services/downloaded_embedded_cover_resolver.dart lib/services/music_player_covers.dart lib/services/music_player_service.dart lib/screens/mornye_library_screen.dart lib/widgets/library_search_results.dart lib/providers/local_library_provider.dart lib/providers/local_library_provider_scan.dart lib/screens/settings/library_settings_page.dart lib/widgets/ios_library_folder_sheet.dart test/local_library_artwork_builder_test.dart test/downloaded_embedded_cover_resolver_test.dart test/music_player_media_metadata_test.dart
+          dart format lib/widgets/local_library_artwork_builder.dart lib/screens/home_tab_widgets.dart lib/services/downloaded_embedded_cover_resolver.dart lib/services/music_player_covers.dart lib/services/music_player_service.dart lib/screens/mornye_library_screen.dart lib/widgets/library_search_results.dart lib/providers/local_library_provider.dart lib/providers/local_library_provider_scan.dart lib/screens/settings/library_settings_page.dart lib/widgets/ios_library_folder_sheet.dart test/local_library_artwork_builder_test.dart test/ios_library_folder_sheet_test.dart test/downloaded_embedded_cover_resolver_test.dart test/music_player_media_metadata_test.dart
           if ! git diff --quiet; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -52,3 +52,6 @@ jobs:
       - name: FLAC artwork widget tests
         timeout-minutes: 2
         run: flutter test --reporter expanded --timeout 30s test/local_library_artwork_builder_test.dart
+      - name: iOS folder selection widget tests
+        timeout-minutes: 3
+        run: flutter test --reporter expanded --timeout 45s test/ios_library_folder_sheet_test.dart

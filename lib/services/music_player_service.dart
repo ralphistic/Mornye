@@ -380,6 +380,7 @@ class MusicPlayerHandler extends BaseAudioHandler
   MediaItem _toMediaItem(PlayableMedia media, {String? resolvedSource}) {
     final item = media.toMediaItem(
       resolvedSource: resolvedSource,
+      suppressArtwork: DownloadedEmbeddedCoverResolver.isLocalFlac(media.source),
       unknownTitle: _runtime.unknownTitle,
       unknownArtist: _runtime.unknownArtist,
       covers: _dependencies.coverStore,
@@ -388,9 +389,6 @@ class MusicPlayerHandler extends BaseAudioHandler
     // Keep Now Playing blank until the authoritative extraction completes,
     // rather than briefly showing a different old cover.
     return item.copyWith(
-      artUri: DownloadedEmbeddedCoverResolver.isLocalFlac(media.source)
-          ? null
-          : item.artUri,
       extras: {...?item.extras, 'playbackInstance': _playbackInstance},
     );
   }

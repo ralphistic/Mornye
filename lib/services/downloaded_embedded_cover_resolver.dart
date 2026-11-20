@@ -193,9 +193,23 @@ class DownloadedEmbeddedCoverResolver {
   static Future<String?> resolveOrExtract(
     String? filePath, {
     VoidCallback? onChanged,
+    bool requireFreshExtraction = false,
   }) async {
     final cleanPath = cleanFilePath(filePath);
     if (cleanPath.isEmpty) return null;
+
+    // Playback must read the embedded picture itself. A source can be retagged
+    // while preserving its modification time, so timestamp-based preview
+    // validation alone cannot prove an in-memory image is still current.
+    if (requireFreshExtraction) {
+      _pendingRefresh.remove(cleanPath);
+      return _ensureCover(
+        cleanPath,
+        forceRefresh: true,
+        onChanged: onChanged,
+        isForeground: true,
+      );
+    }
 
     if (_pendingRefresh.remove(cleanPath)) {
       return _ensureCover(

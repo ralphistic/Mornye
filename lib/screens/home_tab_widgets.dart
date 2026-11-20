@@ -647,8 +647,7 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
     final cacheHeight = (widget.height * 2).round();
 
     Widget child;
-    if (_embeddedCoverPath != null &&
-        !isHttpCoverUrl(_embeddedCoverPath)) {
+    if (_embeddedCoverPath != null && !isHttpCoverUrl(_embeddedCoverPath)) {
       child = Image.file(
         File(_embeddedCoverPath!),
         width: widget.width,

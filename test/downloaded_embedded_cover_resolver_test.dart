@@ -554,6 +554,44 @@ void main() {
   );
 
   test(
+    'playback re-reads retagged FLAC artwork even with unchanged timestamp',
+    () async {
+      const source = 'content://covers/document/same-timestamp';
+      var cover = <int>[1, 2, 3];
+      var extractionCount = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(backendChannel, (call) async {
+            if (call.method == 'getSafFileModTimes') {
+              return jsonEncode({source: 1234});
+            }
+            expect(call.method, 'extractCoverToFile');
+            extractionCount++;
+            await File(
+              (call.arguments as Map)['output_path'] as String,
+            ).writeAsBytes(cover);
+            return jsonEncode({'success': true});
+          });
+      final first = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        source,
+        requireFreshExtraction: true,
+      );
+      expect(first, isNotNull);
+      expect(await File(first!).readAsBytes(), [1, 2, 3]);
+
+      // The file's reported timestamp stays identical after the tag edit.
+      cover = <int>[9, 8, 7];
+      final second = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        source,
+        requireFreshExtraction: true,
+      );
+      expect(extractionCount, 2);
+      expect(second, isNot(first));
+      expect(await File(second!).readAsBytes(), [9, 8, 7]);
+      expect(await File(first).exists(), isFalse);
+    },
+  );
+
+  test(
     'playback-style cached resolveOrExtract reports a changed embedded cover',
     () async {
       var now = DateTime.utc(2026);

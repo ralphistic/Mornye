@@ -157,9 +157,9 @@ extension _LocalLibrarySources on LocalLibraryNotifier {
         lastScannedAt: legacyLastScannedAt,
       );
     }
-    // The folder list keeps the path and bookmark from here on.
-    if (!ref.mounted) return;
-    ref.read(settingsProvider.notifier).setLocalLibraryPathAndBookmark('', '');
+    // The source database remains authoritative for multiple folders.
+    // Keep the legacy settings pair as the last selected folder for existing
+    // integrations; do not erase a valid path/bookmark after migration.
   }
 
   String _displayNameForPath(String path) {

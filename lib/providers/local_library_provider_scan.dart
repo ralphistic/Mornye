@@ -274,9 +274,13 @@ extension _LocalLibraryScan on LocalLibraryNotifier {
         if (securityAccess != null) {
           _log.i('Started iOS security-scoped access: $resolvedPath');
         } else {
-          _log.w(
-            'Failed to start iOS security-scoped access, '
-            'falling back to original path',
+          // A revoked or stale bookmark is not permission to scan the
+          // unscoped path. Preserve the existing indexed tracks and report
+          // the access failure instead of treating them as deleted.
+          throw FileSystemException(
+            'Access to the selected iOS music folder has expired. '
+            'Select the folder again in Library settings.',
+            folderPath,
           );
         }
       }

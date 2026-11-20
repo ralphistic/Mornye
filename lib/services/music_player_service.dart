@@ -380,7 +380,9 @@ class MusicPlayerHandler extends BaseAudioHandler
   MediaItem _toMediaItem(PlayableMedia media, {String? resolvedSource}) {
     final item = media.toMediaItem(
       resolvedSource: resolvedSource,
-      suppressArtwork: DownloadedEmbeddedCoverResolver.isLocalFlac(media.source),
+      suppressArtwork: DownloadedEmbeddedCoverResolver.isLocalFlac(
+        media.source,
+      ),
       unknownTitle: _runtime.unknownTitle,
       unknownArtist: _runtime.unknownArtist,
       covers: _dependencies.coverStore,

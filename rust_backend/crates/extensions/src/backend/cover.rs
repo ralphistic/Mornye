@@ -981,15 +981,17 @@ pub(super) mod tests {
         let first = artwork(101, 32);
         let second = artwork(102, 32);
         let scan = || {
-            backend.save_cover_to_cache_for_scan(
-                audio.to_str().unwrap(),
-                "",
-                cache.to_str().unwrap(),
-                "stable-provider-key",
-                |input, format, check| read_cover(input, format, check),
-                None,
-                &|| Ok(()),
-            ).unwrap()
+            backend
+                .save_cover_to_cache_for_scan(
+                    audio.to_str().unwrap(),
+                    "",
+                    cache.to_str().unwrap(),
+                    "stable-provider-key",
+                    |input, format, check| read_cover(input, format, check),
+                    None,
+                    &|| Ok(()),
+                )
+                .unwrap()
         };
         std::fs::write(&audio, flac_with_picture(&first)).unwrap();
         let old_path = scan();
@@ -998,7 +1000,9 @@ pub(super) mod tests {
         assert_ne!(old_path, new_path);
         assert_eq!(
             std::fs::read(&new_path).unwrap(),
-            mornye_core::cover::library_thumbnail(&second, &|| Ok(())).unwrap().to_vec()
+            mornye_core::cover::library_thumbnail(&second, &|| Ok(()))
+                .unwrap()
+                .to_vec()
         );
         assert_eq!(scan(), new_path);
     }
@@ -1024,7 +1028,7 @@ pub(super) mod tests {
                     read_artwork,
                     None,
                     true,
-                false,
+                    false,
                     &|| Ok(()),
                 )
                 .unwrap();
@@ -1107,7 +1111,7 @@ pub(super) mod tests {
                     read_artwork,
                     None,
                     true,
-                false,
+                    false,
                     &|| Ok(()),
                 )
                 .is_err()

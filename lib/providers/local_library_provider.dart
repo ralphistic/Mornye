@@ -401,19 +401,31 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
     }
     final existing = await _db.getSourceByPath(trimmedPath);
     if (existing != null) {
+      // Re-selecting a previously denied Files folder must replace its old
+      // security-scoped bookmark, not silently retain an expired grant.
+      final renewedBookmark = bookmark?.trim();
+      final refreshed = LocalLibrarySource(
+        id: existing.id,
+        path: existing.path,
+        displayName: displayName.trim().isEmpty
+            ? existing.displayName
+            : displayName.trim(),
+        bookmark: renewedBookmark == null || renewedBookmark.isEmpty
+            ? existing.bookmark
+            : renewedBookmark,
+        volumeId: existing.volumeId,
+        isRemovable: existing.isRemovable,
+        enabled: true,
+        available: true,
+        trackCount: existing.trackCount,
+        lastScannedAt: existing.lastScannedAt,
+        lastSeenAt: DateTime.now(),
+        lastScanError: existing.lastScanError,
+      );
       _sourceVersion++;
-      await _db.updateSourceState(
-        existing.id,
-        enabled: true,
-        available: true,
-        lastSeenAt: DateTime.now(),
-      );
+      await _db.upsertSource(refreshed);
       await _refreshSummaryFromStorage();
-      return existing.copyWith(
-        enabled: true,
-        available: true,
-        lastSeenAt: DateTime.now(),
-      );
+      return refreshed;
     }
 
     final source = LocalLibrarySource(

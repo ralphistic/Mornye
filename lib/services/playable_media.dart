@@ -158,19 +158,21 @@ class PlayableMedia {
   MediaItem toMediaItem({
     String? resolvedSource,
     String? resolvedArtwork,
+    bool suppressArtwork = false,
     String? unknownTitle,
     String? unknownArtist,
     CoverStore? covers,
   }) {
     final reference = coverReference;
-    final stored = resolvedArtwork == null
-        ? (covers ?? musicPlayerRuntime.dependencies.coverStore).songCover(
+    final stored = suppressArtwork || resolvedArtwork != null
+        ? null
+        : (covers ?? musicPlayerRuntime.dependencies.coverStore).songCover(
             source,
             reference,
-          )
-        : null;
-    final artwork =
-        resolvedArtwork ?? (CoverStore.fetches(artUri) ? null : artUri);
+          );
+    final artwork = suppressArtwork
+        ? null
+        : resolvedArtwork ?? (CoverStore.fetches(artUri) ? null : artUri);
     return MediaItem(
       id: id,
       title: title.isEmpty

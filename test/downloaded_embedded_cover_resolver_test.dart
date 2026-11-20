@@ -56,6 +56,54 @@ void main() {
     }
   });
 
+  test('shared display policy preserves non-FLAC and remote artwork', () {
+    const cover = 'https://example.test/cover.jpg';
+    expect(
+      DownloadedEmbeddedCoverResolver.resolveDisplayCover(
+        '/music/song.mp3',
+        fallback: cover,
+      ),
+      cover,
+    );
+    expect(
+      DownloadedEmbeddedCoverResolver.resolveDisplayCover(
+        'https://example.test/song.flac',
+        fallback: cover,
+      ),
+      cover,
+    );
+  });
+
+  test('shared display policy hides stale FLAC fallback until verified', () async {
+    final source = await createAudioFixture('display-policy');
+    const stale = 'https://example.test/old-cover.jpg';
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(backendChannel, (call) async {
+          expect(call.method, 'extractCoverToFile');
+          return jsonEncode({
+            'error': 'failed to extract cover: no cover art found in file',
+          });
+        });
+    expect(
+      DownloadedEmbeddedCoverResolver.resolveDisplayCover(
+        source,
+        fallback: stale,
+      ),
+      isNull,
+    );
+    expect(
+      await DownloadedEmbeddedCoverResolver.resolveOrExtract(source),
+      isNull,
+    );
+    expect(
+      DownloadedEmbeddedCoverResolver.resolveDisplayCover(
+        source,
+        fallback: stale,
+      ),
+      stale,
+    );
+  });
+
   test('only actual local FLAC paths override provider artwork', () {
     expect(
       DownloadedEmbeddedCoverResolver.isLocalFlac('/music/song.flac'),

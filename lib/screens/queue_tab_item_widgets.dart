@@ -780,22 +780,13 @@ extension _QueueTabItemWidgets on _QueueTabState {
     Widget fadeInFileImage(Widget child, int? frame, bool wasSync) {
       if (wasSync) return child;
       final Widget backdrop;
-      if (isDownloaded && item.coverUrl != null) {
-        backdrop = CachedCoverImage(
-          imageUrl: item.coverUrl!,
-          width: size,
-          height: size,
-          memCacheWidth: cacheSize,
-          placeholder: (context, url) =>
-              buildPlaceholder(recoverDocument: false),
-          errorWidget: (context, url, error) => buildPlaceholder(),
-        );
-      } else {
-        backdrop = buildPlaceholder(
-          isLocal: !isDownloaded,
-          recoverDocument: false,
-        );
-      }
+      // The song list must never show a remote/stored cover behind the
+      // authoritative embedded picture while its file image decodes.
+      // That fallback can be an older design even for a newly imported song.
+      backdrop = buildPlaceholder(
+        isLocal: !isDownloaded,
+        recoverDocument: false,
+      );
       final animated = Stack(
         fit: StackFit.expand,
         children: [
@@ -825,7 +816,7 @@ extension _QueueTabItemWidgets on _QueueTabState {
             height: size,
             fit: BoxFit.cover,
             cacheWidth: cacheSize,
-            gaplessPlayback: true,
+            gaplessPlayback: false,
             frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
                 fadeInFileImage(child, frame, wasSynchronouslyLoaded),
             errorBuilder: (context, error, stackTrace) => buildPlaceholder(),
@@ -857,7 +848,7 @@ extension _QueueTabItemWidgets on _QueueTabState {
           height: size,
           fit: BoxFit.cover,
           cacheWidth: cacheSize,
-          gaplessPlayback: true,
+          gaplessPlayback: false,
           frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
               fadeInFileImage(child, frame, wasSynchronouslyLoaded),
           errorBuilder: (context, error, stackTrace) =>

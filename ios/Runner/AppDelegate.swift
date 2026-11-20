@@ -723,7 +723,10 @@ import UniformTypeIdentifiers
             asCopy: false
         )
         picker.delegate = self
-        picker.allowsMultipleSelection = false
+        // iOS Files can acknowledge the single-selection Open tap without
+        // completing a directory grant on some devices. Allow explicit
+        // selection as an alternative to the navigation-bar Open action.
+        picker.allowsMultipleSelection = true
         // Present as a standalone Files browser, not an adaptive sheet over
         // Flutter's recently dismissed selection sheet. On some iOS versions
         // the nested presentation leaves the Files "Open" action unresponsive.

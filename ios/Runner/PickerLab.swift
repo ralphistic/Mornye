@@ -96,7 +96,10 @@ final class PickerLab: NSObject, UIDocumentPickerDelegate, UIAdaptivePresentatio
             attempt.window = hostWindow
             attempt.priorWindow = window
             hostWindow.makeKeyAndVisible()
-            host.present(controller, animated: true) { [weak self] in self?.log("A presented completion") }
+            host.present(controller, animated: true) { [weak self] in
+                controller.presentationController?.delegate = self
+                self?.log("A presented completion")
+            }
         } else {
             var presenter = root
             while let next = presenter.presentedViewController { presenter = next }
@@ -190,6 +193,7 @@ private struct LabImporter: View {
             onEvent("SwiftUI host appeared")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showImporter = true }
         }
+        .onDisappear { onEvent("SwiftUI host disappeared") }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder], allowsMultipleSelection: false) { result in
             onResult(result)
         }

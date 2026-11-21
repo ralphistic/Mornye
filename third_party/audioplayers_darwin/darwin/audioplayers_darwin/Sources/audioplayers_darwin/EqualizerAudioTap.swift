@@ -55,14 +55,14 @@ final class EqualizerAudioTap {
         if flagsOut.pointee & kMTAudioProcessingTapFlag_StartOfStream != 0 { processor.pitch.reset() }
         processor.process(buffers, frames: Int(framesOut.pointee))
       })
-    var tap: MTAudioProcessingTap?
+    var tap: Unmanaged<MTAudioProcessingTap>?
     let status = MTAudioProcessingTapCreate(kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, &tap)
     guard status == noErr, let tap else {
       retained.release()
       throw AudioPlayerError.error("Could not create \(feature.lowercased()) audio tap: \(status)")
     }
     let input = AVMutableAudioMixInputParameters(track: track)
-    input.audioTapProcessor = tap
+    input.audioTapProcessor = tap.takeRetainedValue()
     let mix = AVMutableAudioMix()
     mix.inputParameters = [input]
     item.audioMix = mix

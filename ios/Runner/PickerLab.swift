@@ -1,5 +1,6 @@
 
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 // Diagnostic-only. Never writes a bookmark or changes production library settings.

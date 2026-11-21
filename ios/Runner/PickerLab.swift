@@ -8,6 +8,7 @@ final class PickerLab: NSObject, UIDocumentPickerDelegate, UIAdaptivePresentatio
     private let logKey = "mornye.pickerLab.log.v1"
     private var active: Attempt?
     private var generation = 0
+    private var didLogEnvironment = false
 
     private final class Attempt {
         let id: String
@@ -41,6 +42,8 @@ final class PickerLab: NSObject, UIDocumentPickerDelegate, UIAdaptivePresentatio
     }
 
     func environment(window: UIWindow?) {
+        guard !didLogEnvironment else { return }
+        didLogEnvironment = true
         let scene = window?.windowScene
         let provisioned = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision") != nil
         log("ENV iOS=\(UIDevice.current.systemVersion) bundle=\(Bundle.main.bundleIdentifier ?? "unknown") embedded.mobileprovision=\(provisioned) scene=\(String(describing: scene?.activationState)) window=\(window != nil)")

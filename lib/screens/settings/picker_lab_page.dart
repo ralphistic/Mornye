@@ -59,15 +59,19 @@ class _PickerLabPageState extends State<PickerLabPage> {
       _flutterPickerActive = true;
       final serial = ++_flutterSerial;
       await _event('E begin file_picker.getDirectoryPath');
-      unawaited(Future<void>.delayed(const Duration(seconds: 10), () async {
-        if (_flutterPickerActive && _flutterSerial == serial) {
-          await _event('E NO RESULT CALLBACK AFTER 10 SECONDS');
-          await _refresh();
-        }
-      }));
+      unawaited(
+        Future<void>.delayed(const Duration(seconds: 10), () async {
+          if (_flutterPickerActive && _flutterSerial == serial) {
+            await _event('E NO RESULT CALLBACK AFTER 10 SECONDS');
+            await _refresh();
+          }
+        }),
+      );
       try {
         final path = await FilePicker.platform.getDirectoryPath();
-        await _event('E returned path=${path == null ? "null/cancel" : "non-null"}');
+        await _event(
+          'E returned path=${path == null ? "null/cancel" : "non-null"}',
+        );
         if (path != null) {
           try {
             final directory = Directory(path);
@@ -86,9 +90,9 @@ class _PickerLabPageState extends State<PickerLabPage> {
       return;
     }
     try {
-      final result = await _channel.invokeMethod<String>(
-        'pickerLabStart', {'id': id},
-      );
+      final result = await _channel.invokeMethod<String>('pickerLabStart', {
+        'id': id,
+      });
       if (mounted) setState(() => _status = result ?? 'Picker requested');
     } catch (error) {
       await _event('$id invocation error=$error');

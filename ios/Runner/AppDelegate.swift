@@ -112,7 +112,6 @@ import UniformTypeIdentifiers
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
         playerEngine.run()
-        pickerLab.environment(window: activeWindow)
         configureFlutterEngine(playerEngine.binaryMessenger, registry: playerEngine)
         if let url = launchOptions?[.url] as? URL {
             _ = handleExtensionOAuthRedirect(url: url)

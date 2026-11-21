@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -68,7 +68,7 @@ class _PickerLabPageState extends State<PickerLabPage> {
         }),
       );
       try {
-        final path = await FilePicker.platform.getDirectoryPath();
+        final path = await FilePicker.getDirectoryPath();
         await _event(
           'E returned path=${path == null ? "null/cancel" : "non-null"}',
         );

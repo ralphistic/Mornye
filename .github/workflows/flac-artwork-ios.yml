@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   test-and-build:
-    runs-on: xcode-27
+    runs-on: macos-15
     timeout-minutes: 120
     env:
       MORNYE_DISCORD_SDK: "0"

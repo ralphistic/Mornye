@@ -546,6 +546,11 @@ class _CollectionItemWidget extends StatelessWidget {
   }
 }
 
+bool _isArtworkHttpUrl(String source) {
+  final uri = Uri.tryParse(source);
+  return uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+}
+
 class _DownloadedOrRemoteCover extends StatefulWidget {
   final String? downloadedFilePath;
   final String? imageUrl;
@@ -607,9 +612,10 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
 
   String? _resolveEmbeddedCoverPath() {
     final filePath = widget.downloadedFilePath;
-    if (filePath == null || filePath.isEmpty) return null;
-    return DownloadedEmbeddedCoverResolver.resolve(
+    if (filePath == null || filePath.isEmpty) return widget.imageUrl;
+    return DownloadedEmbeddedCoverResolver.resolveDisplayCover(
       filePath,
+      fallback: widget.imageUrl,
       onChanged: _onEmbeddedCoverChanged,
     );
   }
@@ -646,7 +652,7 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
     final cacheHeight = (widget.height * 2).round();
 
     Widget child;
-    if (_embeddedCoverPath != null) {
+    if (_embeddedCoverPath != null && !_isArtworkHttpUrl(_embeddedCoverPath!)) {
       child = Image.file(
         File(_embeddedCoverPath!),
         width: widget.width,
@@ -654,13 +660,14 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
         fit: BoxFit.cover,
         cacheWidth: cacheWidth,
         cacheHeight: cacheHeight,
-        gaplessPlayback: true,
+        gaplessPlayback: false,
         filterQuality: FilterQuality.low,
         errorBuilder: (_, _, _) => _fallback(),
       );
-    } else if (widget.imageUrl != null && widget.imageUrl!.isNotEmpty) {
+    } else if (_embeddedCoverPath != null &&
+        _isArtworkHttpUrl(_embeddedCoverPath!)) {
       child = CachedCoverImage(
-        imageUrl: widget.imageUrl!,
+        imageUrl: _embeddedCoverPath!,
         width: widget.width,
         height: widget.height,
         fit: BoxFit.cover,

@@ -1071,11 +1071,11 @@ mod tests {
             assert_eq!(Path::new(cover).parent().unwrap(), covers);
             assert_eq!(fs::read(cover).unwrap(), *expected[album]);
         }
-        assert_eq!(thumbnails(&covers).len(), 6);
+        assert_eq!(thumbnails(&covers).len(), 2);
     }
 
     #[test]
-    fn a_scan_stores_one_thumbnail_file_per_picture_under_every_song_name() {
+    fn a_scan_reuses_one_thumbnail_file_per_distinct_picture() {
         use std::os::unix::fs::MetadataExt;
         let root = tempfile::tempdir().unwrap();
         let library = library_with_artwork(root.path(), 2, 3, 8_000);
@@ -1094,20 +1094,20 @@ mod tests {
         for row in result["scanned"].as_array().unwrap() {
             let song = Path::new(row["filePath"].as_str().unwrap());
             let cover = row["coverPath"].as_str().unwrap();
-            assert!(names.insert(cover.to_owned()));
+            names.insert(cover.to_owned());
             albums
                 .entry(song.parent().unwrap().to_string_lossy().into_owned())
                 .or_default()
                 .insert(fs::metadata(cover).unwrap().ino());
         }
-        assert_eq!(names.len(), 6);
-        assert_eq!(thumbnails(&covers).len(), 6);
+        assert_eq!(names.len(), 2);
+        assert_eq!(thumbnails(&covers).len(), 2);
         let files: BTreeSet<_> = albums.values().flatten().collect();
         if cfg!(any(target_vendor = "apple", target_os = "linux")) {
             assert!(albums.values().all(|inodes| inodes.len() == 1));
             assert_eq!(files.len(), 2);
         } else {
-            assert_eq!(files.len(), 6);
+            assert_eq!(files.len(), 2);
         }
     }
 

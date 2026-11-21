@@ -30,6 +30,7 @@ import 'package:mornye/widgets/desktop/context_menu.dart';
 import 'package:mornye/widgets/desktop/hover_play_button.dart';
 import 'package:mornye/widgets/desktop/library_track_menu.dart';
 import 'package:mornye/widgets/library_track_selection_bar.dart';
+import 'package:mornye/widgets/local_library_artwork_builder.dart';
 import 'package:mornye/widgets/library_selection_playback_actions.dart';
 import 'package:mornye/widgets/queue_swipe.dart';
 import 'package:mornye/widgets/selection_bottom_bar.dart';
@@ -483,7 +484,18 @@ class _LibrarySearchResultsState extends ConsumerState<LibrarySearchResults> {
         ),
         child: SizedBox.square(
           dimension: 52,
-          child: hit.cover?.isNotEmpty == true
+          child: song
+              ? LocalLibraryArtworkBuilder(
+                  coverPath: hit.cover,
+                  filePath: hit.samplePath,
+                  builder: (context, cover) => cover?.isNotEmpty == true
+                      ? LocalOrNetworkCoverImage(
+                          url: cover!,
+                          placeholder: fallback,
+                        )
+                      : fallback(context),
+                )
+              : hit.cover?.isNotEmpty == true
               ? LocalOrNetworkCoverImage(url: hit.cover!, placeholder: fallback)
               : fallback(context),
         ),

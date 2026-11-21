@@ -878,13 +878,23 @@ class _LibraryBrowseArtworkState extends State<_LibraryBrowseArtwork> {
             : LocalOrNetworkCoverImage(url: cover, placeholder: fallback),
       );
     }
-    final embedded = entry.cover?.isNotEmpty == true
-        ? null
-        : DownloadedEmbeddedCoverResolver.resolve(
-            entry.samplePath,
-            onChanged: _resolveAgain,
-          );
-    final cover = entry.cover?.isNotEmpty == true ? entry.cover! : embedded;
+    final isFlac = DownloadedEmbeddedCoverResolver.isLocalFlac(
+      entry.samplePath,
+    );
+    // Downloaded albums also have persisted provider/scan covers. For FLAC,
+    // never let one override the actual picture embedded in the audio.
+    final embedded = DownloadedEmbeddedCoverResolver.resolve(
+      entry.samplePath,
+      onChanged: _resolveAgain,
+    );
+    final cover = isFlac
+        ? embedded ??
+              (DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(
+                    entry.samplePath,
+                  )
+                  ? entry.cover
+                  : null)
+        : (entry.cover ?? embedded);
     return cover == null
         ? fallback(context)
         : LocalOrNetworkCoverImage(url: cover, placeholder: fallback);

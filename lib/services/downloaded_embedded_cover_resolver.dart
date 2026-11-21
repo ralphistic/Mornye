@@ -6,7 +6,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:mornye/services/native_file_hash.dart';
+import 'package:crypto/crypto.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/utils/file_access.dart';
 
@@ -73,9 +73,10 @@ class DownloadedEmbeddedCoverResolver {
   static const int _maxConcurrentExtractions = 2;
   static const int _maxQueuedBackgroundExtractions = 24;
   static const String _persistentCacheDirectoryName = 'embedded_cover_previews';
-  // v1 SAF previews could contain the Library's 800px thumbnail instead of
-  // original embedded artwork. Re-extract even when the audio has not changed.
-  static const String _persistentCacheVersion = 'v2';
+  // v1 SAF previews could contain the Library's 800px thumbnail. v2
+  // previews may also preserve artwork from before a FLAC tag edit when the
+  // file timestamp was retained. Re-extract once after this upgrade.
+  static const String _persistentCacheVersion = 'v3';
   static const int _maxPersistentCacheEntries = 384;
   static const int _maxPersistentCacheBytes = 160 << 20;
   static const int _persistentCacheSweepTargetBytes = 128 << 20;
@@ -100,6 +101,12 @@ class DownloadedEmbeddedCoverResolver {
   static const _maxPendingPreviewValidations = 64;
   static DateTime Function() _validationClock = DateTime.now;
   static final _failedExtract = <String, DateTime>{};
+  static final Set<String> _confirmedWithoutEmbeddedCover = <String>{};
+
+  /// True only after the backend explicitly reports that the file has no
+  /// embedded picture. Transient extraction errors do not qualify.
+  static bool hasNoEmbeddedCover(String? path) =>
+      _confirmedWithoutEmbeddedCover.contains(cleanFilePath(path));
   static const _failureRetryDelay = Duration(seconds: 30);
 
   static Directory? _persistentCacheDirectoryOverride;
@@ -114,6 +121,31 @@ class DownloadedEmbeddedCoverResolver {
       return filePath.substring(7);
     }
     return filePath;
+  }
+
+  /// Only local FLAC files can supply embedded artwork. Network references
+  /// may end in .flac but must keep their provider artwork instead.
+  static bool isLocalFlac(String? filePath) {
+    final path = cleanFilePath(filePath);
+    return path.toLowerCase().endsWith('.flac') &&
+        (path.startsWith('content://') ||
+            p.isAbsolute(path) ||
+            p.windows.isAbsolute(path));
+  }
+
+  /// Single display policy for a local FLAC: its embedded picture wins over
+  /// provider artwork and scan thumbnails. While extraction is pending, show
+  /// no substitute image; a stale fallback would misrepresent the file.
+  /// Other audio formats keep their normal artwork source.
+  static String? resolveDisplayCover(
+    String? filePath, {
+    String? fallback,
+    VoidCallback? onChanged,
+  }) {
+    if (!isLocalFlac(filePath)) return fallback;
+    final embedded = resolve(filePath, onChanged: onChanged);
+    if (embedded != null) return embedded;
+    return hasNoEmbeddedCover(filePath) ? fallback : null;
   }
 
   static Future<int?> readFileModTimeMillis(String? filePath) async {
@@ -176,9 +208,23 @@ class DownloadedEmbeddedCoverResolver {
   static Future<String?> resolveOrExtract(
     String? filePath, {
     VoidCallback? onChanged,
+    bool requireFreshExtraction = false,
   }) async {
     final cleanPath = cleanFilePath(filePath);
     if (cleanPath.isEmpty) return null;
+
+    // Playback must read the embedded picture itself. A source can be retagged
+    // while preserving its modification time, so timestamp-based preview
+    // validation alone cannot prove an in-memory image is still current.
+    if (requireFreshExtraction) {
+      _pendingRefresh.remove(cleanPath);
+      return _ensureCover(
+        cleanPath,
+        forceRefresh: true,
+        onChanged: onChanged,
+        isForeground: true,
+      );
+    }
 
     if (_pendingRefresh.remove(cleanPath)) {
       return _ensureCover(
@@ -229,6 +275,7 @@ class DownloadedEmbeddedCoverResolver {
 
     _pendingRefresh.add(cleanPath);
     _failedExtract.remove(cleanPath);
+    _confirmedWithoutEmbeddedCover.remove(cleanPath);
     onChanged?.call();
   }
 
@@ -243,6 +290,7 @@ class DownloadedEmbeddedCoverResolver {
     _pendingRefresh.remove(cleanPath);
     _pendingPreviewValidation.remove(cleanPath);
     _failedExtract.remove(cleanPath);
+    _confirmedWithoutEmbeddedCover.remove(cleanPath);
     if (cached != null) {
       await _cleanupCacheEntry(cached);
     }
@@ -282,6 +330,7 @@ class DownloadedEmbeddedCoverResolver {
     _pendingPreviewValidation.clear();
     await _previewValidationFuture;
     _failedExtract.clear();
+    _confirmedWithoutEmbeddedCover.clear();
 
     final maintenance = _persistentMaintenanceFuture;
     if (maintenance != null) await maintenance;
@@ -327,6 +376,7 @@ class DownloadedEmbeddedCoverResolver {
     await _previewValidationFuture;
     _validationClock = DateTime.now;
     _failedExtract.clear();
+    _confirmedWithoutEmbeddedCover.clear();
     _cacheGeneration.clear();
     _drainScheduled = false;
 
@@ -371,6 +421,7 @@ class DownloadedEmbeddedCoverResolver {
       _pendingRefresh.remove(oldestKey);
       _pendingPreviewValidation.remove(oldestKey);
       _failedExtract.remove(oldestKey);
+      _confirmedWithoutEmbeddedCover.remove(oldestKey);
     }
   }
 
@@ -639,7 +690,11 @@ class DownloadedEmbeddedCoverResolver {
       );
       // Without a timestamp a disk copy cannot be validated: it is extracted
       // again once per memory miss and named by its content below.
-      if (modTime != null &&
+      // A FLAC picture may be retagged while the audio file retains its
+      // modification timestamp. Never trust a previous-session disk preview
+      // solely on that timestamp; re-read its embedded picture on cold cache.
+      if (!isLocalFlac(cleanPath) &&
+          modTime != null &&
           !job.forceRefresh &&
           await _isReusablePersistentPreview(persistentPath, cleanPath)) {
         if (!_isCurrentExtraction(job)) return null;
@@ -650,6 +705,7 @@ class DownloadedEmbeddedCoverResolver {
         );
         _touch(cleanPath, next);
         _failedExtract.remove(cleanPath);
+        _confirmedWithoutEmbeddedCover.remove(cleanPath);
         _trimCacheIfNeeded();
         _notifyCoverChanged(job);
         _schedulePersistentMaintenance();
@@ -678,6 +734,15 @@ class DownloadedEmbeddedCoverResolver {
           await outputFile.exists() &&
           await outputFile.length() > 0;
       if (!hasCover) {
+        final explicitNoCover =
+            result['error']?.toString().contains(
+              'no cover art found in file',
+            ) ??
+            false;
+        if (explicitNoCover) {
+          _confirmedWithoutEmbeddedCover.add(cleanPath);
+          _notifyCoverChanged(job);
+        }
         _rememberFailedExtract(cleanPath);
         if (job.forceRefresh) {
           final previous = _cache.remove(cleanPath);
@@ -696,16 +761,17 @@ class DownloadedEmbeddedCoverResolver {
 
       // An unchanged cover keeps its path; an edited one gets a new path, so
       // no decoded image of the old cover is shown for it.
-      final targetPath = modTime != null
-          ? persistentPath
-          : p.join(
-              directory.path,
-              _persistentFileName(
-                cleanPath,
-                null,
-                content: await _contentHash(outputPath),
-              ),
-            );
+      // A retagged FLAC can keep the same modification timestamp. Include
+      // the actual picture digest in its preview filename so Flutter cannot
+      // reuse decoded pixels from the old picture at the same file path.
+      final targetPath = p.join(
+        directory.path,
+        _persistentFileName(
+          cleanPath,
+          modTime,
+          content: await _contentHash(outputPath),
+        ),
+      );
       if (!_isCurrentExtraction(job)) {
         await _cleanupCoverPath(outputPath);
         return null;
@@ -729,6 +795,7 @@ class DownloadedEmbeddedCoverResolver {
       );
       _touch(cleanPath, next);
       _failedExtract.remove(cleanPath);
+      _confirmedWithoutEmbeddedCover.remove(cleanPath);
       _trimCacheIfNeeded();
 
       if (previous != null && previous.previewPath != finalPath) {
@@ -807,7 +874,9 @@ class DownloadedEmbeddedCoverResolver {
   }
 
   static Future<String> _contentHash(String path) async {
-    return (await hashFileSha256(path)).substring(0, 16);
+    return (await sha256.bind(File(path).openRead()).first)
+        .toString()
+        .substring(0, 16);
   }
 
   /// Two independently mixed 63-bit FNV-1a lanes keep filenames compact.
@@ -934,7 +1003,8 @@ class DownloadedEmbeddedCoverResolver {
       final name = p.basename(entity.path);
       try {
         final stat = await entity.stat();
-        if (name.startsWith('v1_') && name.endsWith('.jpg')) {
+        if ((name.startsWith('v1_') || name.startsWith('v2_')) &&
+            name.endsWith('.jpg')) {
           await entity.delete();
           await _deleteFileIfPresent(
             File(_persistentSourceSidecarPath(entity.path)),

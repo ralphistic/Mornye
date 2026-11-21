@@ -40,7 +40,11 @@ Future<IosPickedDirectory?> showIosLibraryFolderSheet(
   );
   if (location == null || !context.mounted) return null;
   if (location == _LibraryFolderLocation.files) {
-    // Keep the native picker and its bookmark for folders outside our sandbox.
+    // The choice sheet has just been popped. Presenting a document picker
+    // during its dismissal can target a disappearing view controller.
+    // Wait for the bottom-sheet transition to finish first.
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    if (!context.mounted) return null;
     return PlatformBridge.pickIosDirectory();
   }
 

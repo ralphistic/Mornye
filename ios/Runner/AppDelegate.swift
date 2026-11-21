@@ -38,7 +38,17 @@ import UniformTypeIdentifiers
     private let securityScopedAccessLock = NSLock()
     private var securityScopedAccesses: [String: (URL, CoreDirectoryScope)] = [:]
 
+    private let pickerLab = PickerLab()
     private var pendingDirectoryPickerResult: FlutterResult?
+    private var directoryPickerWindow: UIWindow?
+    private weak var previousKeyWindow: UIWindow?
+
+    private func finishDirectoryPickerPresentation() {
+        directoryPickerWindow?.isHidden = true
+        directoryPickerWindow = nil
+        previousKeyWindow?.makeKeyAndVisible()
+        previousKeyWindow = nil
+    }
     private var audioOpenChannel: FlutterMethodChannel?
     private var pendingAudio: [[String]] = []
     private var audioOpenReady = false
@@ -327,6 +337,31 @@ import UniformTypeIdentifiers
             "parseCueSheet", "extractCoverToFile",
             "rewriteSplitArtistTags", "writeM4AFreeformTags", "ensureAC4Config", "writeAC4Metadata", "reEnrichFile",
             "checkHiResAuthenticity"]
+        if call.method == "pickerLabLogs" {
+            result(pickerLab.logs())
+            return
+        }
+        if call.method == "pickerLabClear" {
+            pickerLab.clear()
+            result(nil)
+            return
+        }
+        if call.method == "pickerLabEnvironment" {
+            pickerLab.environment(window: activeWindow)
+            result(nil)
+            return
+        }
+        if call.method == "pickerLabStart" {
+            let id = (call.arguments as? [String: Any])?["id"] as? String ?? ""
+            result(pickerLab.start(id, window: activeWindow))
+            return
+        }
+        if call.method == "pickerLabEvent" {
+            let message = (call.arguments as? [String: Any])?["message"] as? String ?? ""
+            pickerLab.log("Flutter \(message)")
+            result(nil)
+            return
+        }
         if call.method == "setScreenAwake" {
             let args = call.arguments as? [String: Any]
             UIApplication.shared.isIdleTimerDisabled = args?["enabled"] as? Bool ?? false
@@ -706,22 +741,37 @@ import UniformTypeIdentifiers
             ))
             return
         }
-        guard var topController = activeWindow?.rootViewController else {
+        guard let scene = activeWindow?.windowScene else {
             result(FlutterError(
-                code: "NO_VIEW_CONTROLLER",
-                message: "No view controller available to present the folder picker",
+                code: "NO_WINDOW_SCENE",
+                message: "No active iOS window scene available for folder selection",
                 details: nil
             ))
             return
         }
-        while let presented = topController.presentedViewController {
-            topController = presented
-        }
+        // Host Files on a separate UIKit window. The Flutter view hierarchy
+        // otherwise remains the presenting controller for the remote Files UI;
+        // on affected devices Open acknowledges the tap but never completes.
+        previousKeyWindow = activeWindow
+        let hostWindow = UIWindow(windowScene: scene)
+        hostWindow.windowLevel = .alert + 1
+        let host = UIViewController()
+        host.view.backgroundColor = .clear
+        hostWindow.rootViewController = host
+        directoryPickerWindow = hostWindow
+        hostWindow.makeKeyAndVisible()
+
         pendingDirectoryPickerResult = result
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.folder])
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: [UTType.folder],
+            asCopy: false
+        )
         picker.delegate = self
         picker.allowsMultipleSelection = false
-        topController.present(picker, animated: true)
+        picker.modalPresentationStyle = .fullScreen
+        host.present(picker, animated: true) {
+            NSLog("Mornye: isolated folder picker presented")
+        }
     }
 
     // MARK: - iOS Security-Scoped Bookmark Helpers
@@ -809,6 +859,8 @@ extension AppDelegate: UIDocumentPickerDelegate {
         _ controller: UIDocumentPickerViewController,
         didPickDocumentsAt urls: [URL]
     ) {
+        NSLog("Mornye: folder picker didPickDocumentsAt count=\(urls.count)")
+        finishDirectoryPickerPresentation()
         guard let result = pendingDirectoryPickerResult else { return }
         pendingDirectoryPickerResult = nil
         guard let url = urls.first else {
@@ -843,6 +895,8 @@ extension AppDelegate: UIDocumentPickerDelegate {
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        NSLog("Mornye: folder picker cancelled")
+        finishDirectoryPickerPresentation()
         pendingDirectoryPickerResult?(nil)
         pendingDirectoryPickerResult = nil
     }
@@ -887,13 +941,20 @@ class SceneDelegate: FlutterSceneDelegate {
         willConnectTo session: UISceneSession,
         options connectionOptions: UIScene.ConnectionOptions
     ) {
+        // Let FlutterSceneDelegate establish its scene lifecycle first.
+        // A manually created key window before super.scene can leave the
+        // document-provider presentation attached to a competing window.
+        super.scene(scene, willConnectTo: session, options: connectionOptions)
         if let windowScene = scene as? UIWindowScene, let appDelegate {
-            let window = UIWindow(windowScene: windowScene)
-            window.rootViewController = FlutterViewController(engine: appDelegate.playerEngine, nibName: nil, bundle: nil)
+            let window = self.window ?? UIWindow(windowScene: windowScene)
+            if !(window.rootViewController is FlutterViewController) {
+                window.rootViewController = FlutterViewController(
+                    engine: appDelegate.playerEngine, nibName: nil, bundle: nil
+                )
+            }
             self.window = window
             window.makeKeyAndVisible()
         }
-        super.scene(scene, willConnectTo: session, options: connectionOptions)
         for context in connectionOptions.urlContexts {
             if appDelegate?.handleAudioOpen(url: context.url) != true {
                 _ = appDelegate?.handleExtensionOAuthRedirect(url: context.url)

@@ -66,7 +66,8 @@ void main() {
           isNull,
         );
       }
-      expect(unnecessaryReads, 0);
+      // Existing thumbnails no longer suppress FLAC embedded extraction.
+      expect(unnecessaryReads, 2);
     },
   );
 
@@ -100,6 +101,46 @@ void main() {
         ),
         isNull,
       );
+    },
+  );
+
+  test(
+    'FLAC playback replaces a valid but stale scan thumbnail with embedded art',
+    () async {
+      final stale = File('${directory.path}/stale.png');
+      final embedded = File('${directory.path}/embedded.png');
+      await stale.writeAsBytes([1]);
+      await embedded.writeAsBytes([2]);
+      for (final source in [
+        '${directory.path}/song.flac',
+        'content://example.documents/music/song.flac',
+      ]) {
+        for (final artwork in [stale.path, stale.uri.toString()]) {
+          var reads = 0;
+          expect(
+            await resolveEmbeddedArtworkUri(
+              source,
+              artwork,
+              extract: (path) async {
+                expect(path, source);
+                reads++;
+                return embedded.path;
+              },
+            ),
+            embedded.uri.toString(),
+          );
+          expect(reads, 1);
+        }
+        // An extraction failure leaves the current artwork in place.
+        expect(
+          await resolveEmbeddedArtworkUri(
+            source,
+            stale.path,
+            extract: (_) async => null,
+          ),
+          isNull,
+        );
+      }
     },
   );
 

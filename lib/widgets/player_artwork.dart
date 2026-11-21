@@ -92,7 +92,7 @@ class PlayerArtwork extends StatelessWidget {
     return Image(
       image: image,
       fit: BoxFit.cover,
-      gaplessPlayback: true,
+      gaplessPlayback: false,
       errorBuilder: (_, _, _) => placeholder,
     );
   }
@@ -113,7 +113,7 @@ class PlayerArtwork extends StatelessWidget {
     return Image(
       image: image,
       fit: BoxFit.cover,
-      gaplessPlayback: true,
+      gaplessPlayback: false,
       frameBuilder: (_, child, frame, synchronous) {
         if (frame == null && !synchronous) return placeholder;
         onShown();

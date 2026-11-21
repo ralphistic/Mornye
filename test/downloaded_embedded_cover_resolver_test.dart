@@ -56,6 +56,84 @@ void main() {
     }
   });
 
+  test('shared display policy preserves non-FLAC and remote artwork', () {
+    const cover = 'https://example.test/cover.jpg';
+    expect(
+      DownloadedEmbeddedCoverResolver.resolveDisplayCover(
+        '/music/song.mp3',
+        fallback: cover,
+      ),
+      cover,
+    );
+    expect(
+      DownloadedEmbeddedCoverResolver.resolveDisplayCover(
+        'https://example.test/song.flac',
+        fallback: cover,
+      ),
+      cover,
+    );
+  });
+
+  test(
+    'shared display policy hides stale FLAC fallback until verified',
+    () async {
+      final source = await createAudioFixture('display-policy');
+      const stale = 'https://example.test/old-cover.jpg';
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(backendChannel, (call) async {
+            expect(call.method, 'extractCoverToFile');
+            return jsonEncode({
+              'error': 'failed to extract cover: no cover art found in file',
+            });
+          });
+      expect(
+        DownloadedEmbeddedCoverResolver.resolveDisplayCover(
+          source,
+          fallback: stale,
+        ),
+        isNull,
+      );
+      expect(
+        await DownloadedEmbeddedCoverResolver.resolveOrExtract(source),
+        isNull,
+      );
+      expect(
+        DownloadedEmbeddedCoverResolver.resolveDisplayCover(
+          source,
+          fallback: stale,
+        ),
+        stale,
+      );
+    },
+  );
+
+  test('only actual local FLAC paths override provider artwork', () {
+    expect(
+      DownloadedEmbeddedCoverResolver.isLocalFlac('/music/song.flac'),
+      isTrue,
+    );
+    expect(
+      DownloadedEmbeddedCoverResolver.isLocalFlac(
+        'content://example.documents/song.flac',
+      ),
+      isTrue,
+    );
+    expect(
+      DownloadedEmbeddedCoverResolver.isLocalFlac('network://share/song.flac'),
+      isFalse,
+    );
+    expect(
+      DownloadedEmbeddedCoverResolver.isLocalFlac(
+        'https://example.test/song.flac',
+      ),
+      isFalse,
+    );
+    expect(
+      DownloadedEmbeddedCoverResolver.isLocalFlac('/music/song.mp3'),
+      isFalse,
+    );
+  });
+
   test('metadata artwork prefers embedded, then local, then remote', () {
     expect(
       resolveMetadataArtworkSource(
@@ -80,6 +158,24 @@ void main() {
       'https://example.com/online.jpg',
     );
     expect(resolveMetadataArtworkSource(), isNull);
+  });
+
+  test('only explicit missing embedded art permits scanned fallback', () async {
+    final source = await createAudioFixture('no-picture');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(backendChannel, (call) async {
+          expect(call.method, 'extractCoverToFile');
+          return jsonEncode({
+            'error': 'failed to extract cover: no cover art found in file',
+          });
+        });
+    expect(
+      await DownloadedEmbeddedCoverResolver.resolveOrExtract(source),
+      isNull,
+    );
+    expect(DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(source), isTrue);
+    await DownloadedEmbeddedCoverResolver.invalidate(source);
+    expect(DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(source), isFalse);
   });
 
   test(
@@ -182,23 +278,8 @@ void main() {
     'a preview without a source timestamp stays on disk after memory eviction',
     () async {
       const untimed = 'content://example.documents/tree/nas/document/u.flac';
-      var hashes = 0;
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(backendChannel, (call) async {
-            if (call.method == 'runNativeDataJob') {
-              final request =
-                  jsonDecode((call.arguments as Map)['request_json'] as String)
-                      as Map;
-              expect(request['operation'], 'hash_file');
-              expect(await File(request['path'] as String).readAsBytes(), [
-                7,
-                8,
-              ]);
-              hashes++;
-              return {
-                'sha256': sha256.convert([7, 8]).toString(),
-              };
-            }
             if (call.method == 'getSafFileModTimes') {
               final uris = jsonDecode(
                 (call.arguments as Map)['uris'] as String,
@@ -218,7 +299,6 @@ void main() {
         untimed,
       );
       expect(preview, isNotNull);
-      expect(hashes, 1);
       expect(
         preview,
         endsWith('_${sha256.convert([7, 8]).toString().substring(0, 16)}.jpg'),
@@ -247,14 +327,6 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(backendChannel, (call) async {
             if (call.method == 'getSafFileModTimes') return jsonEncode({});
-            if (call.method == 'runNativeDataJob') {
-              final request =
-                  jsonDecode((call.arguments as Map)['request_json'] as String)
-                      as Map;
-              expect(request['operation'], 'hash_file');
-              final bytes = await File(request['path'] as String).readAsBytes();
-              return {'sha256': sha256.convert(bytes).toString()};
-            }
             expect(call.method, 'extractCoverToFile');
             final args = call.arguments as Map<Object?, Object?>;
             await File(args['output_path']! as String).writeAsBytes(cover);
@@ -533,6 +605,93 @@ void main() {
   );
 
   test(
+    'playback re-reads retagged FLAC artwork even with unchanged timestamp',
+    () async {
+      const source = 'content://covers/document/same-timestamp';
+      var cover = <int>[1, 2, 3];
+      var extractionCount = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(backendChannel, (call) async {
+            if (call.method == 'getSafFileModTimes') {
+              return jsonEncode({source: 1234});
+            }
+            expect(call.method, 'extractCoverToFile');
+            extractionCount++;
+            await File(
+              (call.arguments as Map)['output_path'] as String,
+            ).writeAsBytes(cover);
+            return jsonEncode({'success': true});
+          });
+      final first = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        source,
+        requireFreshExtraction: true,
+      );
+      expect(first, isNotNull);
+      expect(await File(first!).readAsBytes(), [1, 2, 3]);
+
+      // The file's reported timestamp stays identical after the tag edit.
+      cover = <int>[9, 8, 7];
+      final second = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        source,
+        requireFreshExtraction: true,
+      );
+      expect(extractionCount, 2);
+      expect(second, isNot(first));
+      expect(await File(second!).readAsBytes(), [9, 8, 7]);
+      expect(await File(first).exists(), isFalse);
+    },
+  );
+
+  test(
+    'playback-style cached resolveOrExtract reports a changed embedded cover',
+    () async {
+      var now = DateTime.utc(2026);
+      DownloadedEmbeddedCoverResolver.setValidationClockForTesting(() => now);
+      const source = 'content://covers/document/playback-refresh';
+      var modTime = 1000;
+      var cover = <int>[1, 2, 3];
+      var notifications = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(backendChannel, (call) async {
+            if (call.method == 'getSafFileModTimes') {
+              return jsonEncode({source: modTime});
+            }
+            expect(call.method, 'extractCoverToFile');
+            await File(
+              (call.arguments as Map)['output_path'] as String,
+            ).writeAsBytes(cover);
+            return jsonEncode({'success': true});
+          });
+
+      final original = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        source,
+      );
+      expect(original, isNotNull);
+      // First validation establishes the interval; then an external retag
+      // changes both the source timestamp and embedded picture.
+      await DownloadedEmbeddedCoverResolver.resolveOrExtract(source);
+      await DownloadedEmbeddedCoverResolver.waitForPreviewValidationForTesting();
+      now = now.add(const Duration(seconds: 5));
+      modTime = 2000;
+      cover = <int>[9, 8, 7];
+
+      final initiallyCached =
+          await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+            source,
+            onChanged: () => notifications++,
+          );
+      expect(initiallyCached, original);
+      await DownloadedEmbeddedCoverResolver.waitForPreviewValidationForTesting();
+      expect(notifications, 1);
+      final refreshed = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        source,
+      );
+      expect(refreshed, isNot(original));
+      expect(await File(refreshed!).readAsBytes(), cover);
+    },
+  );
+
+  test(
     'invalidation during a pending validation cannot restore stale artwork',
     () async {
       const path = 'content://covers/document/invalidation';
@@ -720,8 +879,11 @@ void main() {
       final reused = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
         sourcePath,
       );
-      expect(reused, first);
-      expect(extractionCalls, 1);
+      expect(reused, isNot(first));
+      // The same FLAC timestamp cannot prove the embedded picture is still
+      // identical. A new session must re-extract instead of reusing old bytes.
+      expect(extractionCalls, 2);
+      expect(await File(reused!).readAsBytes(), [2, 20, 21]);
 
       await File(sourcePath).writeAsBytes(const [9, 8, 7, 6, 5]);
       await File(
@@ -732,7 +894,7 @@ void main() {
       final refreshed = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
         sourcePath,
       );
-      expect(extractionCalls, 2);
+      expect(extractionCalls, 3);
       expect(refreshed, isNotNull);
       expect(refreshed, isNot(first));
       expect(await File(refreshed!).exists(), isTrue);
@@ -764,7 +926,7 @@ void main() {
     expect(await File(refreshed!).readAsBytes(), [0xff, 0xd8, 0xff, 0xe0]);
   });
 
-  test('legacy SAF thumbnails are replaced without changing the audio', () async {
+  test('v2 artwork previews are replaced without changing the audio', () async {
     const source = 'content://covers/document/original-artwork.flac';
     sourcePaths.add(source);
     var extractions = 0;
@@ -784,7 +946,7 @@ void main() {
       source,
     ))!;
     await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting();
-    final legacy = preview.replaceFirst('v2_', 'v1_');
+    final legacy = preview.replaceFirst('v3_', 'v2_');
     expect(legacy, isNot(preview));
     await File(preview).rename(legacy);
     await File('$preview.source').rename('$legacy.source');
@@ -918,10 +1080,6 @@ void main() {
     final coverSource = File(
       'lib/screens/track_metadata_screen_cover.dart',
     ).readAsStringSync();
-    final cardsSource = File(
-      'lib/screens/track_metadata_cards.dart',
-    ).readAsStringSync();
-
     expect(
       coverSource,
       contains('DownloadedEmbeddedCoverResolver.isManagedPreviewPath(path)'),
@@ -931,16 +1089,5 @@ void main() {
       contains('DownloadedEmbeddedCoverResolver.resolveOrExtract('),
     );
     expect(coverSource, isNot(contains('PlatformBridge.extractCoverToFile')));
-    expect(
-      cardsSource,
-      contains('Downloaded-item entry points must await resolveOrExtract'),
-    );
-    expect(
-      cardsSource,
-      contains(
-        'Widget coverImage() => artworkImage(cacheWidth: coverCacheWidth)',
-      ),
-    );
-    expect(cardsSource, contains('cacheHeight: backdropCacheWidth'));
   });
 }

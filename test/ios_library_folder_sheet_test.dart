@@ -92,10 +92,35 @@ void main() {
   ) async {
     await openSheet(tester);
     await tester.tap(find.text('Choose from Files'));
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
     expect(calls, ['pickIosDirectory']);
     expect(selection?.path, '/external/Music');
     expect(selection?.bookmark, 'granted-folder-bookmark');
+    expect(failure, isNull);
+  });
+
+  testWidgets('custom Files folder selection keeps music in place', (
+    tester,
+  ) async {
+    final custom = Directory('${root.path}/On My iPhone/Mornye Test Folder');
+    custom.createSync(recursive: true);
+    final track = File('${custom.path}/sample.flac')
+      ..writeAsBytesSync([7, 8, 9]);
+    messenger.setMockMethodCallHandler(backend, (call) async {
+      calls.add(call.method);
+      return {'path': custom.path, 'bookmark': 'folder-grant'};
+    });
+    await openSheet(tester);
+    await tester.tap(find.text('Choose from Files'));
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pumpAndSettle();
+    expect(calls, ['pickIosDirectory']);
+    expect(selection?.path, custom.path);
+    expect(selection?.bookmark, 'folder-grant');
+    expect(track.readAsBytesSync(), [7, 8, 9]);
     expect(failure, isNull);
   });
 
@@ -116,6 +141,8 @@ void main() {
     messenger.setMockMethodCallHandler(backend, (_) async => null);
     await openSheet(tester);
     await tester.tap(find.text('Choose from Files'));
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
     expect(selection, isNull);
     expect(failure, isNull);
@@ -130,6 +157,8 @@ void main() {
     });
     await openSheet(tester);
     await tester.tap(find.text('Choose from Files'));
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
     expect(selection, isNull);
     expect(failure, isA<PlatformException>());

@@ -1,3 +1,6 @@
+import 'dart:io' show Platform;
+
+import 'package:mornye/screens/settings/picker_lab_page.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoActivityIndicator;
 import 'package:mornye/theme/mornye_icons.dart';
@@ -124,6 +127,17 @@ class AppSettingsPage extends ConsumerWidget {
             ...settingsSectionSlivers(
               title: context.l10n.sectionDebug,
               children: [
+                if (Platform.isIOS)
+                  SettingsItem(
+                    icon: Icons.folder_open,
+                    title: "Picker Lab (diagnostics)",
+                    subtitle: "Five isolated iOS Files picker experiments",
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const PickerLabPage(),
+                      ),
+                    ),
+                  ),
                 SettingsSwitchItem(
                   icon: Icons.bug_report,
                   title: context.l10n.optionsDetailedLogging,

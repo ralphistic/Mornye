@@ -10,6 +10,7 @@ import 'package:mornye/models/track.dart';
 import 'package:mornye/providers/library_album_artwork_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/services/cover_store.dart';
+import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
 import 'package:mornye/services/library_cleanup.dart';
 import 'package:mornye/services/library_collections_database.dart';
 import 'package:mornye/services/library_database.dart';
@@ -167,6 +168,38 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
        _networkStorage = networkStorage ?? NetworkStorageService.instance,
        _availabilityProbe = availabilityProbe;
 
+  // Keep Files security scopes open while indexed tracks can be played.
+  // A scan-only lease ends before the player reads the selected audio files.
+  final Map<String, (String, IosSecurityScopedAccess)> _iosLibraryLeases = {};
+
+  Future<void> _retainIosLibraryAccess(LocalLibrarySource source) async {
+    if (!Platform.isIOS ||
+        source.bookmark == null ||
+        source.bookmark!.isEmpty) {
+      return;
+    }
+    final existing = _iosLibraryLeases[source.id];
+    if (existing?.$1 == source.bookmark) return;
+    final access = await PlatformBridge.startAccessingIosBookmark(
+      source.bookmark!,
+    );
+    if (access == null) {
+      _log.w('Cannot restore iOS Files access for ${source.displayName}');
+      return;
+    }
+    _iosLibraryLeases[source.id] = (source.bookmark!, access);
+    if (existing != null) {
+      await PlatformBridge.stopAccessingIosBookmark(existing.$2);
+    }
+  }
+
+  Future<void> _releaseIosLibraryAccess(String sourceId) async {
+    final lease = _iosLibraryLeases.remove(sourceId);
+    if (lease != null) {
+      await PlatformBridge.stopAccessingIosBookmark(lease.$2);
+    }
+  }
+
   final LibraryDatabase _db;
   final NetworkStorageService _networkStorage;
   void Function()? _unsubscribeNetworkRemoval;
@@ -232,6 +265,9 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
     );
     ref.onDispose(() {
       _unsubscribeNetworkRemoval?.call();
+      for (final sourceId in _iosLibraryLeases.keys.toList()) {
+        unawaited(_releaseIosLibraryAccess(sourceId));
+      }
       _scanCancelRequested = true;
       _scanPauseRequested = false;
       _pendingReconnectScans.clear();
@@ -306,6 +342,12 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
       state = state.copyWith(sources: configuredSources);
       await ref.read(settingsProvider.notifier).ensureLoaded();
       await _migrateLegacySource();
+      if (Platform.isIOS) {
+        for (final source in await _db.getSources()) {
+          if (!ref.mounted) return;
+          await _retainIosLibraryAccess(source);
+        }
+      }
       final reconnectedSources = await _refreshSourceAvailabilityInDatabase();
       while (ref.mounted) {
         final sourceVersion = _sourceVersion;
@@ -400,19 +442,40 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
     }
     final existing = await _db.getSourceByPath(trimmedPath);
     if (existing != null) {
+      // Re-selecting a previously denied Files folder must replace its old
+      // security-scoped bookmark, not silently retain an expired grant.
+      final renewedBookmark = bookmark?.trim();
+      final refreshed = LocalLibrarySource(
+        id: existing.id,
+        path: existing.path,
+        displayName: displayName.trim().isEmpty
+            ? existing.displayName
+            : displayName.trim(),
+        bookmark: renewedBookmark == null || renewedBookmark.isEmpty
+            ? existing.bookmark
+            : renewedBookmark,
+        volumeId: existing.volumeId,
+        isRemovable: existing.isRemovable,
+        enabled: true,
+        available: true,
+        trackCount: existing.trackCount,
+        lastScannedAt: existing.lastScannedAt,
+        lastSeenAt: DateTime.now(),
+        lastScanError: existing.lastScanError,
+      );
       _sourceVersion++;
-      await _db.updateSourceState(
-        existing.id,
-        enabled: true,
-        available: true,
-        lastSeenAt: DateTime.now(),
-      );
+      await _db.upsertSource(refreshed);
+      await _retainIosLibraryAccess(refreshed);
       await _refreshSummaryFromStorage();
-      return existing.copyWith(
-        enabled: true,
-        available: true,
-        lastSeenAt: DateTime.now(),
-      );
+      if (Platform.isIOS && ref.mounted) {
+        ref
+            .read(settingsProvider.notifier)
+            .setLocalLibraryPathAndBookmark(
+              refreshed.path,
+              refreshed.bookmark ?? '',
+            );
+      }
+      return refreshed;
     }
 
     final source = LocalLibrarySource(
@@ -430,7 +493,13 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
     );
     _sourceVersion++;
     await _db.upsertSource(source);
+    await _retainIosLibraryAccess(source);
     await _refreshSummaryFromStorage();
+    if (Platform.isIOS && ref.mounted) {
+      ref
+          .read(settingsProvider.notifier)
+          .setLocalLibraryPathAndBookmark(source.path, source.bookmark ?? '');
+    }
     return source;
   }
 
@@ -451,12 +520,22 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
   }
 
   Future<void> removeSource(String sourceId) async {
+    final selectedPath = ref.read(settingsProvider).localLibraryPath;
+    final removed = state.sources
+        .where((source) => source.id == sourceId)
+        .firstOrNull;
     _sourceVersion++;
     _pendingReconnectScans.remove(sourceId);
     await _cancelSourceScan(sourceId);
     await _db.removeSource(sourceId);
+    await _releaseIosLibraryAccess(sourceId);
     await _setScanFailures(sourceId, null);
     await _refreshSummaryFromStorage();
+    if (Platform.isIOS && ref.mounted && removed?.path == selectedPath) {
+      ref
+          .read(settingsProvider.notifier)
+          .setLocalLibraryPathAndBookmark('', '');
+    }
   }
 
   Future<void> _cancelSourceScan(String sourceId) async {
@@ -740,6 +819,14 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
   Future<void> clearLibrary() async {
     _sourceVersion++;
     await _db.clearAll();
+    for (final sourceId in _iosLibraryLeases.keys.toList()) {
+      await _releaseIosLibraryAccess(sourceId);
+    }
+    if (Platform.isIOS && ref.mounted) {
+      ref
+          .read(settingsProvider.notifier)
+          .setLocalLibraryPathAndBookmark('', '');
+    }
 
     try {
       final prefs = await SharedPreferences.getInstance();

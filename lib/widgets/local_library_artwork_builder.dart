@@ -61,6 +61,12 @@ class _LocalLibraryArtworkBuilderState
         ? null
         : coverFilePath(candidate) ?? candidate;
     if (_coverPath == null) return;
+    // Provider covers are URLs, not filesystem paths. Preserve them for
+    // non-FLAC songs instead of treating them as missing scan thumbnails.
+    if (_coverPath!.startsWith('https://') ||
+        _coverPath!.startsWith('http://')) {
+      return;
+    }
     var available = false;
     try {
       final stat = await File(_coverPath!).stat();
@@ -78,12 +84,20 @@ class _LocalLibraryArtworkBuilderState
 
   @override
   Widget build(BuildContext context) {
-    final cover =
-        _coverPath ??
-        DownloadedEmbeddedCoverResolver.resolve(
-          widget.filePath,
-          onChanged: _onCoverChanged,
-        );
+    // For FLAC, the embedded picture is authoritative. A scan thumbnail can
+    // still point to an older image even when the file's picture is correct.
+    // Never display a stale scan thumbnail while FLAC extraction completes.
+    final cover = DownloadedEmbeddedCoverResolver.isLocalFlac(widget.filePath)
+        ? DownloadedEmbeddedCoverResolver.resolveDisplayCover(
+            widget.filePath,
+            fallback: _coverPath,
+            onChanged: _onCoverChanged,
+          )
+        : _coverPath ??
+              DownloadedEmbeddedCoverResolver.resolve(
+                widget.filePath,
+                onChanged: _onCoverChanged,
+              );
     return widget.builder(context, cover);
   }
 }

@@ -166,12 +166,46 @@ class _LibrarySettingsPageState extends ConsumerState<LibrarySettingsPage> {
           return;
         }
         if (picked != null && mounted) {
+          // Do not persist an unusable Files grant or mark it available.
+          // In particular, a provider can return a bookmark that cannot be
+          // reopened after the picker dismisses.
+          IosSecurityScopedAccess? access;
+          try {
+            if (picked.bookmark.isNotEmpty) {
+              access = await PlatformBridge.startAccessingIosBookmark(
+                picked.bookmark,
+              );
+              if (access == null) {
+                throw const FileSystemException(
+                  'The selected folder could not be reopened. Choose it again from Files.',
+                );
+              }
+            }
+            final directory = Directory(access?.path ?? picked.path);
+            if (!await directory.exists()) {
+              throw const FileSystemException(
+                'The selected music folder is not accessible.',
+              );
+            }
+          } catch (error) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(context.friendlyError(error))),
+              );
+            }
+            return;
+          } finally {
+            if (access != null) {
+              await PlatformBridge.stopAccessingIosBookmark(access);
+            }
+          }
+          if (!mounted) return;
           final library = ref.read(localLibraryProvider.notifier);
           final source = await library.addSource(
             path: picked.path,
             displayName: picked.bookmark.isEmpty
                 ? context.l10n.setupAppDocumentsFolder
-                : picked.path,
+                : picked.path.split('/').last,
             bookmark: picked.bookmark,
           );
           await library.startSourceScan(source.id);

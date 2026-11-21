@@ -380,10 +380,16 @@ class MusicPlayerHandler extends BaseAudioHandler
   MediaItem _toMediaItem(PlayableMedia media, {String? resolvedSource}) {
     final item = media.toMediaItem(
       resolvedSource: resolvedSource,
+      suppressArtwork: DownloadedEmbeddedCoverResolver.isLocalFlac(
+        media.source,
+      ),
       unknownTitle: _runtime.unknownTitle,
       unknownArtist: _runtime.unknownArtist,
       covers: _dependencies.coverStore,
     );
+    // Scanned or stored thumbnails may predate the FLAC's embedded picture.
+    // Keep Now Playing blank until the authoritative extraction completes,
+    // rather than briefly showing a different old cover.
     return item.copyWith(
       extras: {...?item.extras, 'playbackInstance': _playbackInstance},
     );
@@ -2200,11 +2206,15 @@ class MusicPlayerHandler extends BaseAudioHandler
       }
       if (!_isCurrentPlayRequest(generation, media)) return;
     }
+    // A fresh embedded extraction avoids stale cached previews, including
+    // retags that preserve the source file's modification timestamp.
     final artwork = await resolveEmbeddedArtworkUri(
       media.source,
       media.artUri,
-      extract: (source) =>
-          DownloadedEmbeddedCoverResolver.resolveOrExtract(source),
+      extract: (source) => DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        source,
+        requireFreshExtraction: true,
+      ),
     );
     if (artwork == null || !_isCurrentPlayRequest(generation, media)) return;
     final current = mediaItem.value;

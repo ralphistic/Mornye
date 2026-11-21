@@ -1,0 +1,58 @@
+name: FLAC artwork iOS build
+
+on:
+  push:
+    branches:
+      - fix/flac-artwork-scan
+      - fix/artwork-consistency-audit
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    env:
+      MORNYE_DISCORD_SDK: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        working-directory: rust_backend
+        run: rustup show
+      - name: Test FLAC artwork regression
+        working-directory: rust_backend
+        run: cargo test --locked -p mornye-extensions flac_scan_ignores_stale_thumbnail_and_tracks_embedded_art_changes
+      - name: Build Rust iOS backend
+        run: bash scripts/build_rust_backend.sh ios
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: .fvmrc
+          cache: true
+      - name: Prepare Flutter SDK
+        run: dart scripts/prepare_flutter_sdk.dart
+      - name: Configure dependencies
+        run: |
+          flutter pub get
+          cd ios
+          pod install
+      - name: Build unsigned iOS app
+        run: |
+          flutter build ios --release --no-codesign --target lib/main.dart
+          python3 scripts/check_backend_ios.py build/ios/iphoneos/Runner.app --backend rust --archs arm64 --platform ios --release
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p build/ios/ipa/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
+          cd build/ios/ipa
+          zip -qr Mornye-artwork-fix-unsigned.ipa Payload
+          test -s Mornye-artwork-fix-unsigned.ipa
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: mornye-artwork-fix-unsigned-ipa
+          path: build/ios/ipa/Mornye-artwork-fix-unsigned.ipa

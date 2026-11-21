@@ -411,6 +411,7 @@ impl Backend {
             },
             batch,
             cfg!(target_os = "android"),
+            false,
             check,
         )
     }
@@ -429,6 +430,7 @@ impl Backend {
         check: &Check<'_>,
     ) -> Result<String, String> {
         let format = mornye_core::tags::library_extension(audio_path, hint);
+        let fresh_flac = format == "flac";
         // The scan's MP4-family reader also accepts .mp4/.aac. The standalone
         // cover export deliberately keeps its narrower legacy suffix policy.
         let format = matches!(format.as_str(), "mp4" | "aac").then_some("m4a");
@@ -442,7 +444,8 @@ impl Backend {
                 read(input, format, check).map(|cover| LibraryArtwork::new(cover, check))
             },
             batch,
-            cfg!(target_os = "android"),
+            cfg!(target_os = "android") || fresh_flac,
+            fresh_flac,
             check,
         )
     }
@@ -488,6 +491,7 @@ impl Backend {
             },
             batch,
             cfg!(target_os = "android"),
+            false,
             check,
         )
     }
@@ -503,6 +507,7 @@ impl Backend {
         read: impl FnOnce(&crate::files::FilePath, &str, &Check<'_>) -> Result<LibraryArtwork, String>,
         batch: Option<&SyncBatch>,
         content_addressed: bool,
+        fresh_source: bool,
         check: &Check<'_>,
     ) -> Result<String, String> {
         let _operation = self.enter()?;
@@ -551,7 +556,7 @@ impl Backend {
             .into_iter()
             .filter_map(|cached| Some((reusable_cached_cover(cached, regenerate)?, cached)))
             .max_by_key(|(modified, _)| *modified);
-        if let Some((_, cached)) = cached
+        if let Some((_, cached)) = cached.filter(|_| !fresh_source)
             && !content_addressed
         {
             return Ok(cached.display());
@@ -580,7 +585,7 @@ impl Backend {
                 }
             ));
         }
-        let cover = if let Some((_, cached)) = cached {
+        let cover = if let Some((_, cached)) = cached.filter(|_| !fresh_source) {
             let mut data = Vec::new();
             cached
                 .open(OpenOptions::new().read(true))
@@ -967,6 +972,42 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn flac_scan_ignores_stale_thumbnail_and_tracks_embedded_art_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let backend = backend(directory.path());
+        let data = directory.path().join("data");
+        let cache = data.join("covers");
+        let audio = data.join("track.flac");
+        let first = artwork(101, 32);
+        let second = artwork(102, 32);
+        let scan = || {
+            backend
+                .save_cover_to_cache_for_scan(
+                    audio.to_str().unwrap(),
+                    "",
+                    cache.to_str().unwrap(),
+                    "stable-provider-key",
+                    |input, format, check| read_cover(input, format, check),
+                    None,
+                    &|| Ok(()),
+                )
+                .unwrap()
+        };
+        std::fs::write(&audio, flac_with_picture(&first)).unwrap();
+        let old_path = scan();
+        std::fs::write(&audio, flac_with_picture(&second)).unwrap();
+        let new_path = scan();
+        assert_ne!(old_path, new_path);
+        assert_eq!(
+            std::fs::read(&new_path).unwrap(),
+            mornye_core::cover::library_thumbnail(&second, &|| Ok(()))
+                .unwrap()
+                .to_vec()
+        );
+        assert_eq!(scan(), new_path);
+    }
+
+    #[test]
     fn android_names_share_one_file_per_picture_and_keep_legacy_references() {
         let directory = tempfile::tempdir().unwrap();
         let backend = backend(directory.path());
@@ -987,6 +1028,7 @@ pub(super) mod tests {
                     read_artwork,
                     None,
                     true,
+                    false,
                     &|| Ok(()),
                 )
                 .unwrap();
@@ -1011,6 +1053,7 @@ pub(super) mod tests {
                 |_, _, _| panic!("legacy hit must not reread audio"),
                 None,
                 true,
+                false,
                 &|| Ok(()),
             )
             .unwrap();
@@ -1048,6 +1091,7 @@ pub(super) mod tests {
                 },
                 None,
                 true,
+                false,
                 &|| Ok(()),
             )
             .unwrap();
@@ -1067,6 +1111,7 @@ pub(super) mod tests {
                     read_artwork,
                     None,
                     true,
+                    false,
                     &|| Ok(()),
                 )
                 .is_err()

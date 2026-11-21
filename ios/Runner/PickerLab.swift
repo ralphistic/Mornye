@@ -103,7 +103,10 @@ final class PickerLab: NSObject, UIDocumentPickerDelegate, UIAdaptivePresentatio
         } else {
             var presenter = root
             while let next = presenter.presentedViewController { presenter = next }
-            presenter.present(controller, animated: true) { [weak self] in self?.log("\(id) presented completion") }
+            presenter.present(controller, animated: true) { [weak self] in
+                controller.presentationController?.delegate = self
+                self?.log("\(id) presented completion")
+            }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
             guard let self = self, self.generation == serial,

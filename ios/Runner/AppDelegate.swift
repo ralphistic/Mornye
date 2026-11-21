@@ -941,13 +941,20 @@ class SceneDelegate: FlutterSceneDelegate {
         willConnectTo session: UISceneSession,
         options connectionOptions: UIScene.ConnectionOptions
     ) {
+        // Let FlutterSceneDelegate establish its scene lifecycle first.
+        // A manually created key window before super.scene can leave the
+        // document-provider presentation attached to a competing window.
+        super.scene(scene, willConnectTo: session, options: connectionOptions)
         if let windowScene = scene as? UIWindowScene, let appDelegate {
-            let window = UIWindow(windowScene: windowScene)
-            window.rootViewController = FlutterViewController(engine: appDelegate.playerEngine, nibName: nil, bundle: nil)
+            let window = self.window ?? UIWindow(windowScene: windowScene)
+            if !(window.rootViewController is FlutterViewController) {
+                window.rootViewController = FlutterViewController(
+                    engine: appDelegate.playerEngine, nibName: nil, bundle: nil
+                )
+            }
             self.window = window
             window.makeKeyAndVisible()
         }
-        super.scene(scene, willConnectTo: session, options: connectionOptions)
         for context in connectionOptions.urlContexts {
             if appDelegate?.handleAudioOpen(url: context.url) != true {
                 _ = appDelegate?.handleExtensionOAuthRedirect(url: context.url)

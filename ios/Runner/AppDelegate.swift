@@ -38,6 +38,7 @@ import UniformTypeIdentifiers
     private let securityScopedAccessLock = NSLock()
     private var securityScopedAccesses: [String: (URL, CoreDirectoryScope)] = [:]
 
+    private let pickerLab = PickerLab()
     private var pendingDirectoryPickerResult: FlutterResult?
     private var directoryPickerWindow: UIWindow?
     private weak var previousKeyWindow: UIWindow?
@@ -111,6 +112,7 @@ import UniformTypeIdentifiers
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
         playerEngine.run()
+        pickerLab.environment(window: activeWindow)
         configureFlutterEngine(playerEngine.binaryMessenger, registry: playerEngine)
         if let url = launchOptions?[.url] as? URL {
             _ = handleExtensionOAuthRedirect(url: url)
@@ -336,6 +338,31 @@ import UniformTypeIdentifiers
             "parseCueSheet", "extractCoverToFile",
             "rewriteSplitArtistTags", "writeM4AFreeformTags", "ensureAC4Config", "writeAC4Metadata", "reEnrichFile",
             "checkHiResAuthenticity"]
+        if call.method == "pickerLabLogs" {
+            result(pickerLab.logs())
+            return
+        }
+        if call.method == "pickerLabClear" {
+            pickerLab.clear()
+            result(nil)
+            return
+        }
+        if call.method == "pickerLabEnvironment" {
+            pickerLab.environment(window: activeWindow)
+            result(nil)
+            return
+        }
+        if call.method == "pickerLabStart" {
+            let id = (call.arguments as? [String: Any])?["id"] as? String ?? ""
+            result(pickerLab.start(id, window: activeWindow))
+            return
+        }
+        if call.method == "pickerLabEvent" {
+            let message = (call.arguments as? [String: Any])?["message"] as? String ?? ""
+            pickerLab.log("Flutter \(message)")
+            result(nil)
+            return
+        }
         if call.method == "setScreenAwake" {
             let args = call.arguments as? [String: Any]
             UIApplication.shared.isIdleTimerDisabled = args?["enabled"] as? Bool ?? false

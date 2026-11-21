@@ -1,4 +1,5 @@
 import 'dart:io' show Platform;
+
 import 'package:mornye/screens/settings/picker_lab_page.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoActivityIndicator;
@@ -132,7 +133,9 @@ class AppSettingsPage extends ConsumerWidget {
                     title: "Picker Lab (diagnostics)",
                     subtitle: "Five isolated iOS Files picker experiments",
                     onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(builder: (_) => const PickerLabPage()),
+                      MaterialPageRoute<void>(
+                        builder: (_) => const PickerLabPage(),
+                      ),
                     ),
                   ),
                 SettingsSwitchItem(
@@ -317,9 +320,8 @@ class _UpdateChannelSelector extends StatelessWidget {
                       currentChannel == 'preview'
                           ? context.l10n.optionsUpdateChannelPreview
                           : context.l10n.optionsUpdateChannelStable,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
+                      style: Theme.of(context).textTheme.bodyMedium
+                          ?.copyWith(color: colorScheme.onSurfaceVariant),
                     ),
                   ],
                 ),
@@ -354,9 +356,8 @@ class _UpdateChannelSelector extends StatelessWidget {
               Expanded(
                 child: Text(
                   context.l10n.optionsUpdateChannelWarning,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: colorScheme.onSurfaceVariant),
                 ),
               ),
             ],

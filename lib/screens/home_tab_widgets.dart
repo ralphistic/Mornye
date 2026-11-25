@@ -619,7 +619,12 @@ class _DownloadedCoverSourceState extends State<_DownloadedCoverSource> {
       _refreshScheduled = false;
       if (!mounted) return;
       final nextPath = _resolveEmbeddedCoverPath();
-      if (nextPath != _embeddedCoverPath) {
+      // The resolver may confirm that a FLAC has no embedded picture while
+      // its path remains null. Rebuild to allow the normal fallback then.
+      if (nextPath != _embeddedCoverPath ||
+          DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(
+            widget.downloadedFilePath,
+          )) {
         setState(() => _embeddedCoverPath = nextPath);
       }
     });

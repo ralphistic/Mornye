@@ -15,6 +15,7 @@ import 'package:mornye/services/library_collections_database.dart';
 import 'package:mornye/services/library_database.dart';
 import 'package:mornye/services/network_library_scanner.dart';
 import 'package:mornye/services/network_storage_service.dart';
+import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
 import 'package:mornye/services/notification_service.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/utils/logger.dart';

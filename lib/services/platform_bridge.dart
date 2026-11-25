@@ -1471,12 +1471,14 @@ class PlatformBridge {
 
   static Future<Map<String, dynamic>> extractCoverToFile(
     String audioPath,
-    String outputPath,
-  ) {
+    String outputPath, {
+    bool displayPreview = false,
+  }) {
     return _withMediaFileAccess([audioPath, outputPath], () {
       return _invokeMap('extractCoverToFile', {
         'audio_path': audioPath,
         'output_path': outputPath,
+        if (displayPreview && Platform.isIOS) 'display_preview': true,
       });
     });
   }

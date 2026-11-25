@@ -1,5 +1,6 @@
 import AuthenticationServices
 import Flutter
+import ImageIO
 import UIKit
 import UniformTypeIdentifiers
 
@@ -8,6 +9,29 @@ import UniformTypeIdentifiers
     // Widget playback intents can launch the process before any scene exists.
     // Keep one headless-capable engine and attach that same player to the UI.
     lazy var playerEngine = FlutterEngine(name: "mornye-player", project: nil, allowHeadlessExecution: true)
+    // Only called for the resolver's temporary display copy, never the audio file.
+    private func normalizeDisplayPreview(at url: URL) {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let originalSpace = image.colorSpace,
+              originalSpace.model == .rgb,
+              originalSpace.name != CGColorSpace.sRGB,
+              image.width > 0, image.height > 0,
+              image.width <= 16000000 / image.height,
+              let context = CGContext(data: nil, width: image.width, height: image.height,
+                                      bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: CGFloat(image.width), height: CGFloat(image.height)))
+        guard let converted = context.makeImage() else { return }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data as CFMutableData, UTType.png.identifier as CFString, 1, nil) else { return }
+        CGImageDestinationAddImage(destination, converted, nil)
+        guard CGImageDestinationFinalize(destination) else { return }
+        try? (data as Data).write(to: url, options: .atomic)
+    }
+
     private let CHANNEL = "com.zarz.mornye/backend"
     private let DOWNLOAD_PROGRESS_STREAM_CHANNEL = "com.zarz.mornye/download_progress_stream"
     private let LIBRARY_SCAN_PROGRESS_STREAM_CHANNEL = "com.zarz.mornye/library_scan_progress_stream"
@@ -586,6 +610,9 @@ import UniformTypeIdentifiers
             let audioPath = args["audio_path"] as! String
             let outputPath = args["output_path"] as! String
             try coreBackend.extractCoverToFile(audioPath: audioPath, outputPath: outputPath)
+            if args["display_preview"] as? Bool == true {
+                normalizeDisplayPreview(at: URL(fileURLWithPath: outputPath))
+            }
             return "{\"success\":true}"
 
 

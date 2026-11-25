@@ -32,7 +32,8 @@ pub const LIBRARY_COVER_REGENERATE_MARKER: &str = ".regenerate";
 /// File stem of the Library thumbnail cached under `key`. 128 bits of
 /// SHA-256 make reuse by name safe: two songs never share a thumbnail.
 pub fn library_cover_stem(key: &str) -> String {
-    let digest = Sha256::digest(key.as_bytes());
+    // Color-managed thumbnails must not reuse files from the legacy pipeline.
+    let digest = Sha256::digest(format!("icc-srgb-v1:{key}").as_bytes());
     let hex: String = digest[..16]
         .iter()
         .map(|byte| format!("{byte:02x}"))

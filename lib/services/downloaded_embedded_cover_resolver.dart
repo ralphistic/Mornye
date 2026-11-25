@@ -75,7 +75,7 @@ class DownloadedEmbeddedCoverResolver {
   static const String _persistentCacheDirectoryName = 'embedded_cover_previews';
   // v1 SAF previews could contain the Library's 800px thumbnail instead of
   // original embedded artwork. Re-extract even when the audio has not changed.
-  static const String _persistentCacheVersion = 'v2';
+  static const String _persistentCacheVersion = 'v3';
   static const int _maxPersistentCacheEntries = 384;
   static const int _maxPersistentCacheBytes = 160 << 20;
   static const int _persistentCacheSweepTargetBytes = 128 << 20;
@@ -673,6 +673,7 @@ class DownloadedEmbeddedCoverResolver {
       final result = await PlatformBridge.extractCoverToFile(
         cleanPath,
         outputPath,
+        displayPreview: true,
       );
 
       if (!_isCurrentExtraction(job)) {

@@ -1099,8 +1099,11 @@ void main() {
     );
     expect(
       headerSource,
-      contains(
-        'child: artworkImage(cacheWidth: coverCacheWidth, iconSize: 48)',
+      matches(
+        RegExp(
+          r'child:\s*artworkImage\(\s*cacheWidth:\s*coverCacheWidth,\s*'
+          r'iconSize:\s*48,\s*landing:\s*true,\s*\)',
+        ),
       ),
     );
     expect(headerSource, contains('cacheHeight: backdropCacheWidth'));

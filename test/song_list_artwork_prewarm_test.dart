@@ -1,36 +1,35 @@
-import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mornye/widgets/song_list_artwork_prewarm.dart';
 
+Future<List<int>> _testPng() async {
+  final recorder = ui.PictureRecorder();
+  ui.Canvas(recorder).drawColor(const ui.Color(0xff4477aa), ui.BlendMode.src);
+  final picture = recorder.endRecording();
+  final image = await picture.toImage(224, 224);
+  picture.dispose();
+  try {
+    final bytes = (await image.toByteData(format: ui.ImageByteFormat.png))!;
+    return bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes);
+  } finally {
+    image.dispose();
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   tearDown(SongListDecodedArtworkCache.clear);
 
-  testWidgets('prepares the same decoded image cache key as the song row', (
-    tester,
-  ) async {
+  testWidgets('prepares only requested FLAC rows', (tester) async {
     await tester.runAsync(() async {
       final directory = await Directory.systemTemp.createTemp('song-prewarm');
       final picture = File('${directory.path}/cover.png');
-      final cache = PaintingBinding.instance.imageCache;
       final calls = <String>[];
       try {
-        // Valid 1x1 PNG, enough to exercise a real image decode.
-        await picture.writeAsBytes(
-          base64Decode(
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=',
-          ),
-        );
-        final rowProvider = ResizeImage.resizeIfNeeded(
-          112,
-          null,
-          FileImage(picture),
-        );
-        final key = await rowProvider.obtainKey(ImageConfiguration.empty);
-        cache.evict(key);
+        await picture.writeAsBytes(await _testPng());
         await prewarmSongListArtwork(
           ['/music/one.flac', '/music/two.mp3', '/music/three.flac'],
           cacheWidth: 112,
@@ -42,35 +41,36 @@ void main() {
           },
         );
         expect(calls, ['/music/one.flac']);
-        expect(cache.containsKey(key), isTrue);
-        cache.evict(key);
+        final prepared = SongListDecodedArtworkCache.imageFor(picture.path, 112);
+        expect(prepared, isNotNull);
+        expect(prepared!.width, 112);
+        expect(prepared.height, 112);
+        prepared.dispose();
       } finally {
         await directory.delete(recursive: true);
       }
     });
   });
 
-  testWidgets('decoded covers survive the normal image-cache entry limit', (
+  testWidgets('all 300 real covers render from decoded cache on first frame', (
     tester,
   ) async {
-    await tester.runAsync(() async {
-      final directory = await Directory.systemTemp.createTemp('song-pins');
-      final cache = PaintingBinding.instance.imageCache;
-      final previousLimit = cache.maximumSize;
-      final providers = <ImageProvider<Object>>[];
-      try {
+    Directory? directory;
+    final paths = <String>[];
+    final covers = <String, String>{};
+    final cache = PaintingBinding.instance.imageCache;
+    final previousLimit = cache.maximumSize;
+    try {
+      await tester.runAsync(() async {
+        directory = await Directory.systemTemp.createTemp('song-page');
+        final bytes = await _testPng();
         cache.maximumSize = 2;
-        final paths = <String>[];
-        final covers = <String, String>{};
-        for (var i = 0; i < 24; i++) {
+        for (var i = 0; i < 300; i++) {
           final song = '/music/song-$i.flac';
-          final picture = File('${directory.path}/cover-$i.png');
-          await picture.writeAsBytes(base64Decode(
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=',
-          ));
+          final picture = File('${directory!.path}/cover-$i.png');
+          await picture.writeAsBytes(bytes);
           paths.add(song);
           covers[song] = picture.path;
-          providers.add(ResizeImage.resizeIfNeeded(112, null, FileImage(picture)));
         }
         await prewarmSongListArtwork(
           paths,
@@ -78,28 +78,53 @@ void main() {
           isActive: () => true,
           resolve: (path) async => covers[path],
         );
-        for (final provider in providers) {
-          final key = await provider.obtainKey(ImageConfiguration.empty);
-          expect(cache.statusForKey(key).live, isTrue);
-          var immediatelyAvailable = false;
-          final stream = provider.resolve(ImageConfiguration.empty);
-          final listener = ImageStreamListener((image, synchronous) {
-            immediatelyAvailable = synchronous;
-            image.dispose();
-          });
-          stream.addListener(listener);
-          expect(immediatelyAvailable, isTrue);
-          stream.removeListener(listener);
+        cache.clear();
+        cache.clearLiveImages();
+        for (final song in paths) {
+          final image = SongListDecodedArtworkCache.imageFor(covers[song]!, 112);
+          expect(image, isNotNull, reason: song);
+          expect(image!.width, 112);
+          expect(image.height, 112);
+          image.dispose();
         }
-      } finally {
-        SongListDecodedArtworkCache.clear();
-        for (final provider in providers) {
-          cache.evict(await provider.obtainKey(ImageConfiguration.empty));
-        }
-        cache.maximumSize = previousLimit;
-        await directory.delete(recursive: true);
+        // Prove the subsequent widget frames need neither the ordinary image
+        // cache nor disk I/O. The image handles already own the decoded pixels.
+        await directory!.delete(recursive: true);
+        directory = null;
+      });
+      for (final i in [0, 17, 18, 150, 299, 0]) {
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: Center(
+              child: SongListPreparedImage(
+                key: ValueKey(i),
+                path: covers[paths[i]]!,
+                cacheWidth: 112,
+                width: 56,
+                height: 56,
+                placeholder: const Text('loading'),
+              ),
+            ),
+          ),
+        );
+        final raw = tester.widget<RawImage>(find.byType(RawImage));
+        expect(raw.image, isNotNull, reason: 'first frame for row $i');
+        expect(find.text('loading'), findsNothing);
       }
-    });
+      // An on-screen widget has its own handle even after a memory-pressure
+      // eviction. Its frame must remain valid.
+      SongListDecodedArtworkCache.clear();
+      await tester.pump();
+      expect(tester.widget<RawImage>(find.byType(RawImage)).image, isNotNull);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      SongListDecodedArtworkCache.clear();
+      cache.maximumSize = previousLimit;
+      if (directory != null) {
+        await tester.runAsync(() => directory!.delete(recursive: true));
+      }
+    }
   });
 
   test('prepares every FLAC row in a full page, including beyond row 18', () async {

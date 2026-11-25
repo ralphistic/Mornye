@@ -860,6 +860,21 @@ extension _QueueTabItemWidgets on _QueueTabState {
             )
           : _resolveDownloadedEmbeddedCoverPath(item.filePath);
       if (embeddedCoverPath != null && !_isArtworkHttpUrl(embeddedCoverPath)) {
+        if (useSongThumbnail) {
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: SongListPreparedImage(
+              path: embeddedCoverPath,
+              cacheWidth: cacheSize,
+              width: size,
+              height: size,
+              placeholder: buildPlaceholder(
+                isLocal: !isDownloaded,
+                recoverDocument: false,
+              ),
+            ),
+          );
+        }
         return ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: Image.file(

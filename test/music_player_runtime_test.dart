@@ -887,7 +887,9 @@ void main() {
     for (var i = 0; i < 400; i++) {
       if (songs.every((s) => PlaybackArtworkCache.readyPath(s.source) != null) &&
           handler.mediaItem.value?.artUri != null &&
-          handler.mediaItem.value?.extras?['embeddedArtworkPending'] != true) break;
+          handler.mediaItem.value?.extras?['embeddedArtworkPending'] != true) {
+        break;
+      }
       await Future<void>.delayed(const Duration(milliseconds: 10));
     }
     final expected = {

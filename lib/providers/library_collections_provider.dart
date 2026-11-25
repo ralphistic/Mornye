@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:mornye/models/library_database_models.dart';
 import 'package:mornye/services/library_database.dart';
 import 'package:mornye/services/restored_local_collections.dart';
 import 'package:mornye/models/library_collections.dart';
@@ -1011,7 +1010,7 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
       if (raw == null) return;
       final decoded = jsonDecode(raw);
       if (decoded is! List) return;
-      final pending = decoded.whereType<Map>()
+      final pending = decoded.whereType<Map<Object?, Object?>>()
           .map(RestoredLocalTrack.fromEntry)
           .whereType<RestoredLocalTrack>().toList();
       final index = await _restoredLocalIndex();

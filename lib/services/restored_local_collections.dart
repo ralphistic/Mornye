@@ -71,9 +71,9 @@ class RestoredLocalTrack {
   final Track track;
   final String? relativePath;
 
-  static RestoredLocalTrack? fromEntry(Map entry) {
+  static RestoredLocalTrack? fromEntry(Map<Object?, Object?> entry) {
     final data = entry['track'];
-    if (data is! Map) return null;
+    if (data is! Map<Object?, Object?>) return null;
     try {
       final track = Track.fromJson(Map<String, dynamic>.from(data));
       if (track.source != 'local' || track.id.isEmpty) return null;
@@ -162,16 +162,16 @@ class RestoredLocalTrackIndex {
   }
 }
 
-Iterable<Map> restoredCollectionEntries(Map collections) sync* {
+Iterable<Map<Object?, Object?>> restoredCollectionEntries(Map<Object?, Object?> collections) sync* {
   for (final kind in ['wishlist', 'loved']) {
     final entries = collections[kind];
-    if (entries is List) yield* entries.whereType<Map>();
+    if (entries is List<Object?>) yield* entries.whereType<Map<Object?, Object?>>();
   }
   final playlists = collections['playlists'];
-  if (playlists is List) {
-    for (final playlist in playlists.whereType<Map>()) {
+  if (playlists is List<Object?>) {
+    for (final playlist in playlists.whereType<Map<Object?, Object?>>()) {
       final entries = playlist['tracks'];
-      if (entries is List) yield* entries.whereType<Map>();
+      if (entries is List<Object?>) yield* entries.whereType<Map<Object?, Object?>>();
     }
   }
 }
@@ -179,7 +179,7 @@ Iterable<Map> restoredCollectionEntries(Map collections) sync* {
 /// Add optional portable paths to backups without changing their wire format
 /// or storing any extra fields in the collection database.
 void attachPortableCollectionPaths(
-  Map collections,
+  Map<Object?, Object?> collections,
   Map<String, String> relativePaths,
 ) {
   for (final entry in restoredCollectionEntries(collections)) {
@@ -214,11 +214,11 @@ RestoredCollectionPlan planRestoredCollections(
 ) {
   final pending = <String, RestoredLocalTrack>{};
   final matches = <String, Track?>{};
-  List<dynamic> rewrite(List entries, {required bool playlist}) {
+  List<dynamic> rewrite(List<Object?> entries, {required bool playlist}) {
     final result = <dynamic>[];
     final used = <String>{};
     for (final entry in entries) {
-      if (entry is! Map || entry['key'] is! String) {
+      if (entry is! Map<Object?, Object?> || entry['key'] is! String) {
         result.add(entry);
         continue;
       }
@@ -252,14 +252,14 @@ RestoredCollectionPlan planRestoredCollections(
   final result = Map<String, dynamic>.from(collections);
   for (final kind in ['wishlist', 'loved']) {
     final entries = result[kind];
-    if (entries is List) result[kind] = rewrite(entries, playlist: false);
+    if (entries is List<Object?>) result[kind] = rewrite(entries, playlist: false);
   }
   final playlists = result['playlists'];
-  if (playlists is List) {
+  if (playlists is List<Object?>) {
     result['playlists'] = [
       for (final playlist in playlists)
-        if (playlist is Map && playlist['tracks'] is List)
-          {...playlist, 'tracks': rewrite(playlist['tracks'] as List, playlist: true)}
+        if (playlist is Map<Object?, Object?> && playlist['tracks'] is List<Object?>)
+          {...playlist, 'tracks': rewrite(playlist['tracks'] as List<Object?>, playlist: true)}
         else playlist,
     ];
   }

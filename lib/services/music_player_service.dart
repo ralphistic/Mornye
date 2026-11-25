@@ -425,7 +425,9 @@ class MusicPlayerHandler extends BaseAudioHandler
   /// first in both directions; never await artwork in the audio start path.
   void _warmPlaybackArtwork() {
     if (!_dependencies.isIOS || _disposed || _index < 0 ||
-        _index >= _media.length) return;
+        _index >= _media.length) {
+      return;
+    }
     final revision = ++_artworkWarmRevision;
     final center = _index;
     final paths = <String>{};
@@ -2530,13 +2532,17 @@ class MusicPlayerHandler extends BaseAudioHandler
             ),
     );
     if (artworkRevision != _artworkRequestRevision ||
-        !_isCurrentPlayRequest(generation, media)) return;
+        !_isCurrentPlayRequest(generation, media)) {
+      return;
+    }
     if (artwork == null && !prepares) return;
     final current = mediaItem.value;
     if (current == null || current.extras?['source'] != media.source) return;
     final uri = artwork == null ? null : Uri.parse(artwork);
     if (current.artUri == uri &&
-        current.extras?['embeddedArtworkPending'] != true) return;
+        current.extras?['embeddedArtworkPending'] != true) {
+      return;
+    }
     final updated = current.copyWith(
       artUri: uri,
       extras: {

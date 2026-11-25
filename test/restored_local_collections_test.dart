@@ -61,11 +61,12 @@ void main() {
         ]},
       ],
     }, index);
-    final loved = plan.collections['loved'] as List;
+    final loved = (plan.collections['loved'] as List<Object?>).cast<Map<String, dynamic>>();
     expect(loved.map((e) => e['key']), ['local:${current.id}', 'tidal-web:${remote.id}', 'local:${missing.id}']);
-    expect(loved.first['track']['coverUrl'], current.coverPath);
-    final tracks = (plan.collections['playlists'] as List).single['tracks'] as List;
-    expect(tracks.map((e) => e['track']['id']), [current.id, current.id, current.id]);
+    expect((loved.first['track'] as Map<String, dynamic>)['coverUrl'], current.coverPath);
+    final playlistData = (plan.collections['playlists'] as List<Object?>).single as Map<Object?, Object?>;
+    final tracks = (playlistData['tracks'] as List<Object?>).cast<Map<String, dynamic>>();
+    expect(tracks.map((e) => (e['track'] as Map<String, dynamic>)['id']), [current.id, current.id, current.id]);
     expect(tracks.map((e) => e['key']).toSet(), hasLength(3));
     expect(tracks.map((e) => e['addedAt']).toSet(), {'2026-01-01T00:00:00'});
     expect(plan.pending.map((e) => e.track.id), [missing.id]);
@@ -97,7 +98,7 @@ void main() {
     final playlist = await db.query('playlist_tracks',orderBy:'added_at');
     expect(playlist, hasLength(2));
     expect(playlist.map((r) => r['added_at']), ['2026-01-01','2026-01-02']);
-    expect(playlist.map((r) => jsonDecode(r['track_json'] as String)['id']), [match.id,match.id]);
+    expect(playlist.map((r) => (jsonDecode(r['track_json'] as String) as Map<String, dynamic>)['id']), [match.id,match.id]);
     expect(playlist.map((r) => r['track_key']).toSet(), hasLength(2));
   });
 }

@@ -8,8 +8,8 @@ class PlaybackArtworkCache {
   static const _maxBytes = 96 << 20;
   static const _maxSources = 180;
   static const _maxImages = 48;
-  static final _entries = LinkedHashMap<String, _PlaybackCover>();
-  static final _images = LinkedHashMap<(String, int), ui.Image>();
+  static final _entries = <String, _PlaybackCover>{};
+  static final _images = <(String, int), ui.Image>{};
   static final _pending = <(String, int), Future<String?>>{};
   static final _tokens = <String, Object>{};
   static int _epoch = 0;

@@ -229,7 +229,9 @@ class _PreparedPlaybackImageState extends State<_PreparedPlaybackImage> {
   void didUpdateWidget(covariant _PreparedPlaybackImage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.path == widget.path && oldWidget.width == widget.width &&
-        _image != null) return;
+        _image != null) {
+      return;
+    }
     final next = PlaybackArtworkCache.imageForPath(widget.path, widget.width);
     _image?.dispose();
     _image = next;

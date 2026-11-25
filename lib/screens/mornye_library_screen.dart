@@ -906,13 +906,19 @@ class _LibraryBrowseArtworkState extends State<_LibraryBrowseArtwork> {
       );
     }
     final stored = entry.cover?.isNotEmpty == true;
-    final embedded = stored
+    final isFlac = DownloadedEmbeddedCoverResolver.isLocalFlac(entry.samplePath);
+    final embedded = stored && !isFlac
         ? null
         : DownloadedEmbeddedCoverResolver.resolve(
             entry.samplePath,
             onChanged: _resolveAgain,
           );
-    final cover = stored ? entry.cover! : embedded;
+    final cover = isFlac
+        ? embedded ??
+              (DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(entry.samplePath)
+                  ? entry.cover
+                  : null)
+        : (stored ? entry.cover! : embedded);
     return cover == null
         ? fallback(context)
         : LocalOrNetworkCoverImage(

@@ -773,14 +773,16 @@ class DownloadedEmbeddedCoverResolver {
       // A retagged FLAC can keep the same modification timestamp. Include
       // the actual picture digest in its preview filename so Flutter cannot
       // reuse decoded pixels from the old picture at the same file path.
-      final targetPath = p.join(
-        directory.path,
-        _persistentFileName(
-          cleanPath,
-          modTime,
-          content: await _contentHash(outputPath),
-        ),
-      );
+      final targetPath = modTime != null && !isLocalFlac(cleanPath) && !job.forceRefresh
+          ? persistentPath
+          : p.join(
+              directory.path,
+              _persistentFileName(
+                cleanPath,
+                modTime,
+                content: await _contentHash(outputPath),
+              ),
+            );
       if (!_isCurrentExtraction(job)) {
         await _cleanupCoverPath(outputPath);
         return null;
@@ -1012,7 +1014,7 @@ class DownloadedEmbeddedCoverResolver {
       final name = p.basename(entity.path);
       try {
         final stat = await entity.stat();
-        if ((name.startsWith('v1_') || name.startsWith('v2_')) &&
+        if ((name.startsWith('v1_') || name.startsWith('v2_') || name.startsWith('v3_')) &&
             name.endsWith('.jpg')) {
           await entity.delete();
           await _deleteFileIfPresent(

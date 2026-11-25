@@ -831,6 +831,55 @@ void main() {
     expect(startedPaths, hasLength(paths.length));
   });
 
+  test('unavailable cache directory is nonfatal and retries', () async {
+    final source = await createAudioFixture('unavailable-cache');
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    const paths = MethodChannel('plugins.flutter.io/path_provider');
+    var available = false;
+    var extractions = 0;
+    DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(null);
+    messenger.setMockMethodCallHandler(paths, (call) async {
+      if (!available) {
+        throw PlatformException(code: 'temporarily_unavailable');
+      }
+      return persistentCacheDirectory.path;
+    });
+    messenger.setMockMethodCallHandler(backendChannel, (call) async {
+      expect(call.method, 'extractCoverToFile');
+      extractions++;
+      final args = call.arguments as Map<Object?, Object?>;
+      await File(args['output_path']! as String).writeAsBytes(
+        const [0xff, 0xd8, 0xff, 0xe0],
+      );
+      return jsonEncode({'success': true});
+    });
+    try {
+      expect(
+        await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+          source,
+          requireFreshExtraction: true,
+        ),
+        isNull,
+      );
+      expect(extractions, 0);
+      expect(DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(source), isFalse);
+      available = true;
+      final recovered = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        source,
+        requireFreshExtraction: true,
+      );
+      expect(recovered, isNotNull);
+      expect(await File(recovered!).readAsBytes(), [0xff, 0xd8, 0xff, 0xe0]);
+      expect(extractions, 1);
+    } finally {
+      await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting();
+      DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(
+        persistentCacheDirectory,
+      );
+      messenger.setMockMethodCallHandler(paths, null);
+    }
+  });
+
   test('force refresh drops a stale cover when artwork is removed', () async {
     final sourcePath = await createAudioFixture('removed-cover');
     var extractionCalls = 0;

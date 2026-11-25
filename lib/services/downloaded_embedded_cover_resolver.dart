@@ -912,7 +912,16 @@ class DownloadedEmbeddedCoverResolver {
         final appCache = await getApplicationCacheDirectory();
         return p.join(appCache.path, _persistentCacheDirectoryName);
       }();
-      rootPath = await future;
+      try {
+        rootPath = await future;
+      } catch (_) {
+        // A transient platform/storage failure must not poison every later
+        // artwork request. Only clear the failed lookup we actually awaited.
+        if (identical(_persistentCacheRootFuture, future)) {
+          _persistentCacheRootFuture = null;
+        }
+        rethrow;
+      }
     }
 
     final directory = Directory(rootPath);
@@ -1183,12 +1192,14 @@ class DownloadedEmbeddedCoverResolver {
     String cleanPath, {
     String? exceptPath,
   }) async {
-    final directory = await _getPersistentCacheDirectory();
     final prefix = '${_persistentCacheVersion}_${_stablePathHash(cleanPath)}_';
     final normalizedExcept = exceptPath == null
         ? null
         : _normalizedAbsolutePath(exceptPath);
     try {
+      // Directory discovery itself can fail (e.g. protected data, plugin
+      // startup or a test without a platform provider). Cleanup is best effort.
+      final directory = await _getPersistentCacheDirectory();
       await for (final entity in directory.list(followLinks: false)) {
         if (entity is! File) continue;
         final name = p.basename(entity.path);

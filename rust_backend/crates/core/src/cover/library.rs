@@ -123,7 +123,7 @@ pub fn library_thumbnail_entry(
             return Ok(hit);
         }
     }
-    let resized = super::resize(data, super::LIBRARY_MAX_DIMENSION, check)?;
+    let resized = super::resize_library(data, super::LIBRARY_MAX_DIMENSION, check)?;
     check()?;
     let thumbnail: Arc<[u8]> = match resized {
         std::borrow::Cow::Borrowed(bytes) => bytes.into(),

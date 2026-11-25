@@ -1,6 +1,7 @@
 //! Provider artwork sizing. Resolution selection remains extension-owned.
 
-use image::{DynamicImage, ImageFormat, ImageReader};
+use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
+use moxcms::{ColorProfile, Layout, TransformOptions};
 use std::borrow::Cow;
 use std::io::Cursor;
 
@@ -40,6 +41,24 @@ pub fn resize<'a>(
     max_dimension: i64,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<Cow<'a, [u8]>, String> {
+    resize_impl(data, max_dimension, check, false)
+}
+
+/// Only derived library artwork is normalized; provider downloads retain their existing policy.
+fn resize_library<'a>(
+    data: &'a [u8],
+    max_dimension: i64,
+    check: &dyn Fn() -> Result<(), String>,
+) -> Result<Cow<'a, [u8]>, String> {
+    resize_impl(data, max_dimension, check, true)
+}
+
+fn resize_impl<'a>(
+    data: &'a [u8],
+    max_dimension: i64,
+    check: &dyn Fn() -> Result<(), String>,
+    normalize: bool,
+) -> Result<Cow<'a, [u8]>, String> {
     check()?;
     if data.is_empty() || max_dimension <= 0 {
         return Ok(Cow::Borrowed(data));
@@ -52,7 +71,16 @@ pub fn resize<'a>(
     if width == 0 || height == 0 {
         return Err(format!("invalid artwork dimensions {width}x{height}"));
     }
-    if i64::from(width.max(height)) <= max_dimension {
+    let small = i64::from(width.max(height)) <= max_dimension;
+    let profile = if normalize {
+        reader(data)?.into_decoder()
+            .and_then(|mut decoder| decoder.icc_profile())
+            .ok().flatten()
+            .and_then(|bytes| ColorProfile::new_from_slice(&bytes).ok())
+    } else {
+        None
+    };
+    if small && profile.is_none() {
         return Ok(Cow::Borrowed(data));
     }
     if u64::from(width) * u64::from(height) > MAX_DECODE_PIXELS {
@@ -61,11 +89,19 @@ pub fn resize<'a>(
         ));
     }
     check()?;
-    let source = reader(data)?
+    let mut source = reader(data)?
         .decode()
         .map_err(|error| format!("decode artwork: {error}"))?;
     check()?;
-    let limit = max_dimension as u32; // Positive and less than an input u32 dimension.
+    if let Some(profile) = profile {
+        // Unsupported or malformed profiles must not prevent artwork display.
+        if let Some(converted) = normalize_rgb(&source, &profile, check)? {
+            source = converted;
+        } else if small {
+            return Ok(Cow::Borrowed(data));
+        }
+    }
+    let limit = max_dimension.min(i64::from(width.max(height))) as u32;
     let (dw, dh) = if width >= height {
         (
             limit,
@@ -238,6 +274,41 @@ pub fn resize<'a>(
     Ok(Cow::Owned(encoded))
 }
 
+// Convert actual RGB samples, never merely relabel a wide-gamut profile as sRGB.
+fn normalize_rgb(
+    source: &DynamicImage,
+    profile: &ColorProfile,
+    check: &dyn Fn() -> Result<(), String>,
+) -> Result<Option<DynamicImage>, String> {
+    let target = ColorProfile::new_srgb();
+    let options = TransformOptions::default();
+    macro_rules! convert {
+        ($image:expr, $layout:expr, $method:ident, $variant:ident, $channels:expr) => {{
+            let input = $image;
+            let Ok(transform) = profile.$method($layout, &target, $layout, options) else {
+                return Ok(None);
+            };
+            let mut output = input.clone();
+            let stride = input.width() as usize * $channels;
+            for (src, dst) in input.as_raw().chunks(stride)
+                .zip(output.as_mut().chunks_mut(stride)) {
+                check()?;
+                if transform.transform(src, dst).is_err() {
+                    return Ok(None);
+                }
+            }
+            Ok(Some(DynamicImage::$variant(output)))
+        }};
+    }
+    match source {
+        DynamicImage::ImageRgb8(image) => convert!(image, Layout::Rgb, create_transform_8bit, ImageRgb8, 3),
+        DynamicImage::ImageRgba8(image) => convert!(image, Layout::Rgba, create_transform_8bit, ImageRgba8, 4),
+        DynamicImage::ImageRgb16(image) => convert!(image, Layout::Rgb, create_transform_16bit, ImageRgb16, 3),
+        DynamicImage::ImageRgba16(image) => convert!(image, Layout::Rgba, create_transform_16bit, ImageRgba16, 4),
+        _ => Ok(None),
+    }
+}
+
 fn neighbors(destination: u32, source_size: u32, destination_size: u32) -> (u32, u32, f64) {
     let source = (f64::from(destination) + 0.5)
         * (f64::from(source_size) / f64::from(destination_size))
@@ -276,6 +347,32 @@ impl Pixels {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_p3_library_artwork_is_converted_not_relabelled() {
+        use image::ImageEncoder;
+        let mut original = Vec::new();
+        let mut encoder = image::codecs::png::PngEncoder::new(&mut original);
+        encoder.set_icc_profile(ColorProfile::new_display_p3().encode().unwrap()).unwrap();
+        let pixels = [180u8, 80, 60, 255].repeat(16);
+        encoder.write_image(&pixels, 4, 4, image::ExtendedColorType::Rgba8).unwrap();
+        let profile = |data: &[u8]| reader(data).unwrap().into_decoder().unwrap().icc_profile().unwrap();
+        assert!(profile(&original).is_some());
+        // Reproduce the legacy profile loss on the unchanged provider path.
+        let legacy = resize(&original, 2, &|| Ok(())).unwrap();
+        assert!(profile(&legacy).is_none());
+        assert_eq!(image::load_from_memory(&legacy).unwrap().to_rgba8().get_pixel(0, 0).0, [180, 80, 60, 255]);
+        for limit in [2, 4, 8] {
+            let corrected = resize_library(&original, limit, &|| Ok(())).unwrap();
+            let decoded = image::load_from_memory(&corrected).unwrap().to_rgba8();
+            let pixel = decoded.get_pixel(0, 0).0;
+            assert!(pixel[0] > 185 && pixel[1] < 80 && pixel[2] < 60, "{pixel:?}");
+            assert_eq!(pixel[3], 255);
+            assert_eq!(decoded.width(), 4.min(limit as u32));
+        }
+        assert!(profile(&original).is_some());
+        assert_eq!(image::load_from_memory(&original).unwrap().to_rgba8().as_raw(), &pixels);
+    }
 
     #[test]
     fn rgb_and_opaque_rgba_produce_identical_resized_pngs() {

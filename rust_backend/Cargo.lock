@@ -1703,6 +1703,7 @@ dependencies = [
  "claxon",
  "image",
  "md-5",
+ "moxcms",
  "regex",
  "roxmltree",
  "rustix",

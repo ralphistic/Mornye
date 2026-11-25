@@ -1,0 +1,106 @@
+name: v5.4.5 combined artwork regression and iOS IPA
+on:
+  push:
+    branches: [fix/v5.4.5-artwork-combined]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: combined-artwork-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  dart-artwork:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: .fvmrc
+          cache: true
+      - name: Prepare Flutter SDK
+        run: dart scripts/prepare_flutter_sdk.dart
+      - name: Dependencies and localization
+        run: |
+          flutter pub get
+          dart scripts/gen_l10n.dart
+      - name: Analyze artwork consumers and tests
+        run: |
+          flutter analyze --no-pub lib/providers/local_library_provider.dart lib/screens/home_tab_widgets.dart lib/screens/mornye_library_screen.dart lib/screens/queue_tab_item_widgets.dart lib/services/downloaded_embedded_cover_resolver.dart lib/services/music_player_service.dart lib/services/playable_media.dart lib/utils/playback_artwork.dart lib/widgets/cached_cover_image.dart lib/widgets/library_search_results.dart lib/widgets/local_library_artwork_builder.dart lib/widgets/player_artwork.dart test/downloaded_embedded_cover_resolver_test.dart test/local_library_artwork_builder_test.dart test/music_player_media_metadata_test.dart test/playback_artwork_test.dart
+      - name: Embedded resolver regression
+        timeout-minutes: 5
+        run: flutter test --reporter expanded --timeout 45s test/downloaded_embedded_cover_resolver_test.dart
+      - name: Playback and widget regression
+        timeout-minutes: 6
+        run: flutter test --reporter expanded --timeout 45s test/playback_artwork_test.dart test/music_player_media_metadata_test.dart test/local_library_artwork_builder_test.dart
+  rust-artwork:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: rust_backend
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust_backend
+      - name: ICC and core artwork regression
+        run: cargo test --locked -p mornye-core cover:: -- --nocapture
+      - name: Thumbnail freshness regression
+        run: cargo test --locked -p mornye-extensions backend::cover::tests:: -- --nocapture
+      - name: Library scan regression
+        run: cargo test --locked -p mornye-extensions backend::library::scan::tests:: -- --nocapture
+  test-and-build:
+    needs: [dart-artwork, rust-artwork]
+    runs-on: xcode-27
+    timeout-minutes: 120
+    env:
+      MORNYE_DISCORD_SDK: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        working-directory: rust_backend
+        run: rustup show
+      - name: Test artwork regression
+        working-directory: rust_backend
+        run: |
+          cargo test --locked -p mornye-core cover:: -- --nocapture
+      - name: Build Rust iOS backend
+        run: bash scripts/build_rust_backend.sh ios
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: .fvmrc
+          cache: true
+      - name: Prepare Flutter SDK
+        run: dart scripts/prepare_flutter_sdk.dart
+      - name: Configure dependencies
+        run: |
+          flutter pub get
+          dart scripts/gen_l10n.dart
+          cd ios
+          pod install
+      - name: Build unsigned iOS app
+        run: |
+          flutter build ios --release --no-codesign --config-only --target lib/main.dart
+          cd ios
+          xcodebuild -workspace Runner.xcworkspace -scheme Runner -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -archivePath build/Runner.xcarchive archive CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=""
+          cd ..
+          python3 -m unittest discover -s scripts -p 'test_check_backend_ios.py'
+          python3 scripts/check_backend_ios.py ios/build/Runner.xcarchive/Products/Applications/Runner.app --dsym ios/build/Runner.xcarchive/dSYMs/Runner.app.dSYM --backend rust --archs arm64 --platform ios --release
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p build/ios/ipa/Payload
+          ditto ios/build/Runner.xcarchive/Products/Applications/Runner.app build/ios/ipa/Payload/Runner.app
+          cd build/ios/ipa
+          zip -qr Mornye-v5.4.5-combined-unsigned.ipa Payload
+          test -s Mornye-v5.4.5-combined-unsigned.ipa
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: mornye-v5.4.5-combined-unsigned-ipa
+          path: build/ios/ipa/Mornye-v5.4.5-combined-unsigned.ipa

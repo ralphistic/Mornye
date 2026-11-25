@@ -110,6 +110,7 @@ import 'package:mornye/widgets/animation_utils.dart';
 import 'package:mornye/widgets/selection_bottom_bar.dart';
 import 'package:mornye/widgets/smoothed_progress.dart';
 import 'package:mornye/widgets/song_row_tap.dart';
+import 'package:mornye/widgets/song_list_artwork_prewarm.dart';
 import 'package:mornye/widgets/track_collection_quick_actions.dart';
 import 'package:mornye/widgets/two_finger_pinch_listener.dart';
 import 'package:mornye/utils/desktop_platform.dart';
@@ -719,6 +720,32 @@ class _QueueTabState extends ConsumerState<QueueTab> {
   @override
   Widget build(BuildContext context) {
     if (context.isMornye && widget.librarySection == null) {
+      if (Platform.isIOS) {
+        // Keep the initial Songs page (including its decoded leading covers)
+        // warm while the user is on the Library overview.
+        final (sortMode, localEnabled) = ref.watch(
+          settingsProvider.select(
+            (s) => (s.historySortMode, s.localLibraryEnabled),
+          ),
+        );
+        final request = _QueueLibraryPageRequest(
+          filterMode: 'all',
+          limit: _libraryPageSize,
+          offset: 0,
+          searchQuery: '',
+          filterSource: null,
+          filterQuality: null,
+          filterFormat: null,
+          filterMetadata: null,
+          sortMode: sortMode,
+          localLibraryEnabled: localEnabled,
+        );
+        ref.watch(
+          _preparedSongsPageProvider(
+            (request, (context.tokens.coverList * 2).toInt()),
+          ),
+        );
+      }
       return MornyeLibraryScreen(
         onOpenSection: (section) => pushPage<void>(
           context,
@@ -943,12 +970,22 @@ class _QueueTabState extends ConsumerState<QueueTab> {
 
     final activePageRequest = pageRequest(historyFilterMode);
     // The Artists, Genres and Folders pages browse their own queries.
+    final prepareSongListArtwork = Platform.isIOS &&
+        activePageRequest.offset == 0 &&
+        historyFilterMode == 'all' &&
+        (widget.librarySection != null || historyViewMode == 'list');
     final activePageValue =
         searchingLibrary ||
             historyFilterMode == 'artists' ||
             historyFilterMode == 'genres' ||
             historyFilterMode == 'folders'
         ? const AsyncData(_QueueLibraryPageData())
+        : prepareSongListArtwork
+        ? ref.watch(
+            _preparedSongsPageProvider(
+              (activePageRequest, (context.tokens.coverList * 2).toInt()),
+            ),
+          )
         : ref.watch(_queueLibraryPageProvider(activePageRequest));
 
     // The in-memory snapshot regroups every history item. It is only needed

@@ -455,3 +455,22 @@ final _queueLibraryPageProvider = FutureProvider.autoDispose
         nextCursor: page.nextCursor,
       );
     });
+
+/// The Songs view consumes this same prepared page as the Library overview.
+/// Do not gate other views, pagination or network artwork on local FLAC I/O.
+final _preparedSongsPageProvider = FutureProvider.autoDispose
+    .family<_QueueLibraryPageData, (_QueueLibraryPageRequest, int)>((
+      ref,
+      key,
+    ) async {
+      final (request, cacheWidth) = key;
+      final page = await ref.watch(_queueLibraryPageProvider(request).future);
+      if (!ref.mounted) return page;
+      await prewarmSongListArtwork(
+        page.items.map((item) => item.filePath),
+        cacheWidth: cacheWidth,
+        isActive: () => ref.mounted,
+        resolve: DownloadedEmbeddedCoverResolver.resolveOrExtract,
+      );
+      return page;
+    });

@@ -861,8 +861,20 @@ extension _QueueTabItemWidgets on _QueueTabState {
             fit: BoxFit.cover,
             cacheWidth: cacheSize,
             gaplessPlayback: false,
-            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
-                fadeInFileImage(child, frame, wasSynchronouslyLoaded),
+            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+              // A prepared FLAC cover is ready on the first row frame.
+              // A genuine miss should appear immediately after decoding,
+              // without a further 180ms artwork fade.
+              if (isFlac) {
+                return frame == null
+                    ? buildPlaceholder(
+                        isLocal: !isDownloaded,
+                        recoverDocument: false,
+                      )
+                    : child;
+              }
+              return fadeInFileImage(child, frame, wasSynchronouslyLoaded);
+            },
             errorBuilder: (context, error, stackTrace) => item.coverUrl != null
                 ? CachedCoverImage(
                     imageUrl: item.coverUrl!,

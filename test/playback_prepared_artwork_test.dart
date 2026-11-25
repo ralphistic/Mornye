@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
+import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/player_artwork.dart';
 
 import 'support/prepared_playback_artwork_fixture.dart';
@@ -46,6 +47,10 @@ void main() {
         ),
       );
 
+      final placeholder = find.byWidgetPredicate(
+        (widget) => widget is AppIcon && widget.icon == Icons.music_note,
+      );
+
       // One widget pump per track, without an intervening pumpAndSettle.
       // Ordinary Flutter cache is empty, so a synchronous RawImage must
       // already own the actual correct pixels for the selected song.
@@ -54,7 +59,7 @@ void main() {
         ...List.generate(29, (i) => 28 - i),
       ]) {
         await tester.pumpWidget(player(Uri.file(paths[index]).toString()));
-        expect(find.byIcon(Icons.music_note), findsNothing);
+        expect(placeholder, findsNothing);
         final raw = tester.widget<RawImage>(find.byType(RawImage));
         expect(raw.image, isNotNull, reason: 'first frame of track $index');
         await tester.runAsync(() async {
@@ -65,9 +70,16 @@ void main() {
       }
       expect(calls, hasLength(30), reason: 'skips must not extract again');
       await tester.pumpWidget(player(null, pending: true));
-      expect(find.byIcon(Icons.music_note), findsNothing);
+      expect(placeholder, findsNothing);
+      final held = tester.widget<RawImage>(find.byType(RawImage)).image;
+      expect(held, isNotNull);
+      await tester.runAsync(() async {
+        final bytes = (await held!.toByteData(format: ui.ImageByteFormat.rawRgba))!;
+        expect(bytes.buffer.asUint8List(bytes.offsetInBytes, 4), [0, 255, 77, 255]);
+      });
       await tester.pumpWidget(player(null));
-      expect(find.byIcon(Icons.music_note), findsOneWidget);
+      expect(placeholder, findsOneWidget);
+      expect(find.byType(RawImage), findsNothing);
 
       await tester.runAsync(() async {
         final source = files.first;

@@ -683,11 +683,16 @@ class _DownloadedOrRemoteCover extends StatelessWidget {
             fit: BoxFit.cover,
             cacheWidth: cacheWidth,
             cacheHeight: cacheHeight,
-            gaplessPlayback: true,
+            gaplessPlayback: false,
             filterQuality: FilterQuality.low,
             errorBuilder: (_, _, _) => _fallback(),
           );
-        } else if (remote != null && remote.isNotEmpty) {
+        } else if (remote != null &&
+            remote.isNotEmpty &&
+            (!DownloadedEmbeddedCoverResolver.isLocalFlac(downloadedFilePath) ||
+                DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(
+                  downloadedFilePath,
+                ))) {
           child = CachedCoverImage(
             imageUrl: remote,
             width: width,

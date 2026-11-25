@@ -136,6 +136,37 @@ part 'queue_tab_filter_sheet.dart';
 
 const _historyItemForCompletionBridge = CompletionBridgeTracker.historyItemFor;
 
+/// Retain the initial prepared Songs page from the shell, including when the
+/// Home tab is visible. The library is ready before the user opens Songs.
+void watchInitialSongListArtwork(WidgetRef ref, BuildContext context) {
+  if (!Platform.isIOS) return;
+  final (sortMode, localEnabled) = ref.watch(
+    settingsProvider.select((s) => (s.historySortMode, s.localLibraryEnabled)),
+  );
+  final request = _QueueLibraryPageRequest(
+    filterMode: 'all',
+    limit: _QueueTabState._libraryPageSize,
+    offset: 0,
+    searchQuery: '',
+    filterSource: null,
+    filterQuality: null,
+    filterFormat: null,
+    filterMetadata: null,
+    sortMode: sortMode,
+    localLibraryEnabled: localEnabled,
+  );
+  // Keep the provider alive without rebuilding the shell as each page loads.
+  ref.watch(
+    _preparedSongsPageProvider(
+      (request, (context.tokens.coverList * 2).toInt()),
+    ).select((_) => 0),
+  );
+}
+
+void refreshPreparedSongListArtwork(WidgetRef ref) {
+  if (Platform.isIOS) ref.invalidate(_preparedSongsPageProvider);
+}
+
 class QueueTab extends ConsumerStatefulWidget {
   final String? librarySection;
 
@@ -376,6 +407,9 @@ class _QueueTabState extends ConsumerState<QueueTab> {
     DownloadedEmbeddedCoverResolver.previewsCleared.addListener(
       _onEmbeddedCoverChanged,
     );
+    if (Platform.isIOS) {
+      SongListArtworkCache.changes.addListener(_onSongThumbnailChanged);
+    }
     _completionBridgePlayableProbe = CompletionBridgePlayableProbeCache(
       onPlayable: _fileExistsCache.markExists,
     );
@@ -453,6 +487,9 @@ class _QueueTabState extends ConsumerState<QueueTab> {
     DownloadedEmbeddedCoverResolver.previewsCleared.removeListener(
       _onEmbeddedCoverChanged,
     );
+    if (Platform.isIOS) {
+      SongListArtworkCache.changes.removeListener(_onSongThumbnailChanged);
+    }
     _slideSelect.dispose();
     _hideSelectionOverlay();
     _hidePlaylistSelectionOverlay();
@@ -640,6 +677,10 @@ class _QueueTabState extends ConsumerState<QueueTab> {
     );
   }
 
+  void _onSongThumbnailChanged() {
+    _onEmbeddedCoverChanged(SongListArtworkCache.changes.value.$1);
+  }
+
   void _onEmbeddedCoverChanged([String? filePath]) {
     if (!mounted) return;
     final cleanPath = DownloadedEmbeddedCoverResolver.cleanFilePath(filePath);
@@ -720,32 +761,6 @@ class _QueueTabState extends ConsumerState<QueueTab> {
   @override
   Widget build(BuildContext context) {
     if (context.isMornye && widget.librarySection == null) {
-      if (Platform.isIOS) {
-        // Keep the initial Songs page (including its decoded leading covers)
-        // warm while the user is on the Library overview.
-        final (sortMode, localEnabled) = ref.watch(
-          settingsProvider.select(
-            (s) => (s.historySortMode, s.localLibraryEnabled),
-          ),
-        );
-        final request = _QueueLibraryPageRequest(
-          filterMode: 'all',
-          limit: _libraryPageSize,
-          offset: 0,
-          searchQuery: '',
-          filterSource: null,
-          filterQuality: null,
-          filterFormat: null,
-          filterMetadata: null,
-          sortMode: sortMode,
-          localLibraryEnabled: localEnabled,
-        );
-        ref.watch(
-          _preparedSongsPageProvider(
-            (request, (context.tokens.coverList * 2).toInt()),
-          ),
-        );
-      }
       return MornyeLibraryScreen(
         onOpenSection: (section) => pushPage<void>(
           context,
@@ -971,7 +986,6 @@ class _QueueTabState extends ConsumerState<QueueTab> {
     final activePageRequest = pageRequest(historyFilterMode);
     // The Artists, Genres and Folders pages browse their own queries.
     final prepareSongListArtwork = Platform.isIOS &&
-        activePageRequest.offset == 0 &&
         historyFilterMode == 'all' &&
         (widget.librarySection != null || historyViewMode == 'list');
     final activePageValue =

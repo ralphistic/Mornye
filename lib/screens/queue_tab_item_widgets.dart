@@ -843,8 +843,16 @@ extension _QueueTabItemWidgets on _QueueTabState {
 
     // The same authoritative FLAC policy is used by Home and the Library.
     final isFlac = DownloadedEmbeddedCoverResolver.isLocalFlac(item.filePath);
+    final useSongThumbnail = Platform.isIOS &&
+        size != null &&
+        SongListArtworkCache.supports(item.filePath);
     if (isDownloaded || isFlac) {
-      final embeddedCoverPath = isFlac
+      final embeddedCoverPath = useSongThumbnail
+          ? SongListArtworkCache.resolve(
+              item.filePath,
+              onChanged: _embeddedCoverChangedCallback(item.filePath),
+            )
+          : isFlac
           ? DownloadedEmbeddedCoverResolver.resolveDisplayCover(
               item.filePath,
               fallback: item.coverUrl ?? item.localCoverPath,
@@ -875,7 +883,9 @@ extension _QueueTabItemWidgets on _QueueTabState {
               }
               return fadeInFileImage(child, frame, wasSynchronouslyLoaded);
             },
-            errorBuilder: (context, error, stackTrace) => item.coverUrl != null
+            errorBuilder: (context, error, stackTrace) => isFlac
+                ? buildPlaceholder(isLocal: !isDownloaded, recoverDocument: false)
+                : item.coverUrl != null
                 ? CachedCoverImage(
                     imageUrl: item.coverUrl!,
                     width: size,
@@ -893,7 +903,9 @@ extension _QueueTabItemWidgets on _QueueTabState {
     // Do not substitute a potentially outdated library/remote thumbnail
     // while a FLAC's embedded artwork is still being extracted.
     if (isFlac &&
-        !DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(item.filePath)) {
+        !(useSongThumbnail
+            ? SongListArtworkCache.hasNoEmbeddedCover(item.filePath)
+            : DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(item.filePath))) {
       return buildPlaceholder(isLocal: !isDownloaded);
     }
 

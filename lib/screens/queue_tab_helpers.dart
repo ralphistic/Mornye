@@ -457,7 +457,8 @@ final _queueLibraryPageProvider = FutureProvider.autoDispose
     });
 
 /// The Songs view consumes this same prepared page as the Library overview.
-/// Do not gate other views, pagination or network artwork on local FLAC I/O.
+/// Each bounded database page is prepared before its rows appear. Other views
+/// and network artwork keep their existing behavior.
 final _preparedSongsPageProvider = FutureProvider.autoDispose
     .family<_QueueLibraryPageData, (_QueueLibraryPageRequest, int)>((
       ref,
@@ -470,7 +471,8 @@ final _preparedSongsPageProvider = FutureProvider.autoDispose
         page.items.map((item) => item.filePath),
         cacheWidth: cacheWidth,
         isActive: () => ref.mounted,
-        resolve: DownloadedEmbeddedCoverResolver.resolveOrExtract,
+        resolve: SongListArtworkCache.prepare,
       );
+      unawaited(SongListArtworkCache.maintain());
       return page;
     });

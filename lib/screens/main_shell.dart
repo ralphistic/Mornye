@@ -34,6 +34,7 @@ import 'package:mornye/screens/queue_tab.dart';
 import 'package:mornye/screens/settings/profile_settings_page.dart';
 import 'package:mornye/screens/settings/settings_tab.dart';
 import 'package:mornye/services/platform_bridge.dart';
+import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
 import 'package:mornye/services/shell_navigation_service.dart';
 import 'package:mornye/services/share_intent_service.dart';
 import 'package:mornye/services/music_playback_deck.dart';
@@ -263,6 +264,9 @@ class _MainShellState extends ConsumerState<MainShell>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (Platform.isIOS) {
+      DownloadedEmbeddedCoverResolver.previewsCleared.addListener(_reprepareSongArtwork);
+    }
     WidgetsBinding.instance.addObserver(_backSwipe);
     usbAudioStatus.addListener(_onUsbAudioStatusChanged);
     _homePreviewStopObserver = _PreviewStopNavigatorObserver(
@@ -374,8 +378,15 @@ class _MainShellState extends ConsumerState<MainShell>
     });
   }
 
+  void _reprepareSongArtwork() {
+    if (mounted) refreshPreparedSongListArtwork(ref);
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      refreshPreparedSongListArtwork(ref);
+    }
     if (state == AppLifecycleState.resumed && _initialSafRepairComplete) {
       unawaited(_repairSafAccessIfNeeded());
       unawaited(ref.read(extensionAutoUpdateProvider.notifier).checkOnResume());
@@ -475,6 +486,9 @@ class _MainShellState extends ConsumerState<MainShell>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    if (Platform.isIOS) {
+      DownloadedEmbeddedCoverResolver.previewsCleared.removeListener(_reprepareSongArtwork);
+    }
     WidgetsBinding.instance.removeObserver(_backSwipe);
     usbAudioStatus.removeListener(_onUsbAudioStatusChanged);
     ShellNavigationService.unregisterTabSelectionHandler(this);
@@ -1058,6 +1072,7 @@ class _MainShellState extends ConsumerState<MainShell>
 
   @override
   Widget build(BuildContext context) {
+    watchInitialSongListArtwork(ref, context);
     ref.watch(
       playbackNotificationProvider((
         favorite: context.l10n.trackOptionAddToLoved,

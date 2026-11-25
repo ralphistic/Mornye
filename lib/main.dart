@@ -56,6 +56,7 @@ import 'package:mornye/utils/local_library_scan_prefs.dart';
 import 'package:mornye/utils/logger.dart';
 import 'package:mornye/utils/view_display.dart';
 import 'package:mornye/widgets/desktop/desktop_commands.dart'
+import 'package:mornye/widgets/song_list_artwork_prewarm.dart';
     show restoreDesktopSidebar;
 import 'package:mornye/widgets/desktop/desktop_inspector.dart'
     show bindDesktopFullScreenLyrics;
@@ -750,6 +751,7 @@ class _EagerInitializationState extends ConsumerState<EagerInitialization>
 
   @override
   void didHaveMemoryPressure() {
+    SongListDecodedArtworkCache.clear();
     // OS memory pressure: drop decoded bitmaps (disk caches stay intact) and
     // ask the native backend to release disposable runtimes and caches.
     final imageCache = PaintingBinding.instance.imageCache;

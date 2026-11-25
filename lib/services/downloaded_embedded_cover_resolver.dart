@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
@@ -9,6 +10,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:crypto/crypto.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/utils/file_access.dart';
+
+part 'downloaded_embedded_cover_resolver_song_rows.dart';
 
 class _EmbeddedCoverCacheEntry {
   final String previewPath;
@@ -282,6 +285,7 @@ class DownloadedEmbeddedCoverResolver {
     }
 
     _pendingRefresh.add(cleanPath);
+    await SongListArtworkCache._invalidate(cleanPath);
     _failedExtract.remove(cleanPath);
     _confirmedWithoutEmbeddedCover.remove(cleanPath);
     onChanged?.call();
@@ -291,6 +295,7 @@ class DownloadedEmbeddedCoverResolver {
     final cleanPath = cleanFilePath(filePath);
     if (cleanPath.isEmpty) return;
 
+    final rowInvalidation = SongListArtworkCache._invalidate(cleanPath);
     _cacheGeneration[cleanPath] = (_cacheGeneration[cleanPath] ?? 0) + 1;
     final cached = _cache.remove(cleanPath);
     _cancelPendingExtraction(cleanPath);
@@ -303,6 +308,7 @@ class DownloadedEmbeddedCoverResolver {
       await _cleanupCacheEntry(cached);
     }
     await _deletePersistentVariantsForSource(cleanPath);
+    await rowInvalidation;
   }
 
   /// Fires once previews were deleted from outside a song's own refresh, as
@@ -326,31 +332,36 @@ class DownloadedEmbeddedCoverResolver {
   static Future<void> clearPersistentCache({
     bool preserveVerifiedFlacPreviews = false,
   }) async {
-    final keys = <String>{..._cache.keys, ..._pendingExtract.keys};
-    for (final key in keys) {
-      _cacheGeneration[key] = (_cacheGeneration[key] ?? 0) + 1;
-      _cancelPendingExtraction(key);
-      _cacheGeneration.remove(key);
-    }
-    while (_activeExtractions > 0) {
-      await Future<void>.delayed(const Duration(milliseconds: 1));
-    }
-    _cacheGeneration.clear();
+    await SongListArtworkCache._suspend();
+    try {
+      final keys = <String>{..._cache.keys, ..._pendingExtract.keys};
+      for (final key in keys) {
+        _cacheGeneration[key] = (_cacheGeneration[key] ?? 0) + 1;
+        _cancelPendingExtraction(key);
+        _cacheGeneration.remove(key);
+      }
+      while (_activeExtractions > 0) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      _cacheGeneration.clear();
 
-    _cache.clear();
-    _pendingRefresh.clear();
-    _pendingPreviewValidation.clear();
-    await _previewValidationFuture;
-    _failedExtract.clear();
-    _confirmedWithoutEmbeddedCover.clear();
+      _cache.clear();
+      _pendingRefresh.clear();
+      _pendingPreviewValidation.clear();
+      await _previewValidationFuture;
+      _failedExtract.clear();
+      _confirmedWithoutEmbeddedCover.clear();
 
-    final maintenance = _persistentMaintenanceFuture;
-    if (maintenance != null) await maintenance;
-    final directory = await _getPersistentCacheDirectory();
-    await _clearDirectoryContents(
-      directory,
-      preserveVerifiedFlacPreviews: preserveVerifiedFlacPreviews,
-    );
+      final maintenance = _persistentMaintenanceFuture;
+      if (maintenance != null) await maintenance;
+      final directory = await _getPersistentCacheDirectory();
+      await _clearDirectoryContents(
+        directory,
+        preserveVerifiedFlacPreviews: preserveVerifiedFlacPreviews,
+      );
+    } finally {
+      SongListArtworkCache._resume(verifyContent: preserveVerifiedFlacPreviews);
+    }
   }
 
   @visibleForTesting
@@ -358,6 +369,7 @@ class DownloadedEmbeddedCoverResolver {
     if (_activeExtractions != 0 || _pendingExtract.isNotEmpty) {
       throw StateError('Cannot replace persistent cache while work is active');
     }
+    SongListArtworkCache._resetForTesting();
     _persistentCacheDirectoryOverride = directory;
     _persistentCacheRootFuture = null;
     _persistentCacheRootPath = directory == null
@@ -370,6 +382,8 @@ class DownloadedEmbeddedCoverResolver {
   static Future<void> resetMemoryStateForTesting({
     bool preservePersistentFiles = true,
   }) async {
+    await SongListArtworkCache._suspend();
+    SongListArtworkCache._resume(verifyContent: false);
     final maintenance = _persistentMaintenanceFuture;
     if (maintenance != null) await maintenance;
 
@@ -1237,8 +1251,9 @@ class DownloadedEmbeddedCoverResolver {
       );
       await for (final entity in directory.list(followLinks: false)) {
         if (preserveVerifiedFlacPreviews &&
-            entity is File &&
-            verifiedName.hasMatch(p.basename(entity.path))) {
+            ((entity is File && verifiedName.hasMatch(p.basename(entity.path))) ||
+                (entity is Directory &&
+                    p.basename(entity.path) == SongListArtworkCache._directoryName))) {
           continue;
         }
         try {

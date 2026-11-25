@@ -1,0 +1,18 @@
+name: Artwork color regression
+on:
+  push:
+    branches: [fix/v5.4.5-artwork-color-management]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: rust_backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - run: rustup show
+      - run: cargo test --locked -p mornye-core cover:: -- --nocapture

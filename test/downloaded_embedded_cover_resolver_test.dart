@@ -607,7 +607,7 @@ void main() {
   test(
     'playback re-reads retagged FLAC artwork even with unchanged timestamp',
     () async {
-      const source = 'content://covers/document/same-timestamp';
+      const source = 'content://covers/document/same-timestamp.flac';
       var cover = <int>[1, 2, 3];
       var extractionCount = 0;
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

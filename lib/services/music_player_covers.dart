@@ -101,6 +101,10 @@ class _MusicCovers {
   void _show(String ref) {
     if (handler._disposed) return;
     MediaItem? covered(MediaItem item, String source, String? reference) {
+      // A local FLAC's embedded picture is authoritative. A late cover-store
+      // notification must not replace its extracted image with an older scan
+      // or provider cover in Now Playing or the playback queue.
+      if (DownloadedEmbeddedCoverResolver.isLocalFlac(source)) return null;
       if (ref != reference && ref != CoverStore.songCoverReference(source)) {
         return null;
       }

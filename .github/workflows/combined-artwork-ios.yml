@@ -2,6 +2,9 @@ name: v5.4.5 combined artwork regression and iOS IPA
 on:
   push:
     branches: [fix/v5.4.5-artwork-combined]
+  pull_request:
+    branches: [fix/v5.4.5-artwork-color-management]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 permissions:
   contents: read
@@ -10,10 +13,13 @@ concurrency:
   cancel-in-progress: true
 jobs:
   dart-artwork:
+    if: github.event_name != 'pull_request' || github.head_ref == 'fix/v5.4.5-artwork-combined'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -35,6 +41,7 @@ jobs:
         timeout-minutes: 6
         run: flutter test --reporter expanded --timeout 45s test/playback_artwork_test.dart test/music_player_media_metadata_test.dart test/local_library_artwork_builder_test.dart
   rust-artwork:
+    if: github.event_name != 'pull_request' || github.head_ref == 'fix/v5.4.5-artwork-combined'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     defaults:
@@ -42,6 +49,8 @@ jobs:
         working-directory: rust_backend
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
         with:
@@ -61,6 +70,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Set up Rust
         working-directory: rust_backend
         run: rustup show

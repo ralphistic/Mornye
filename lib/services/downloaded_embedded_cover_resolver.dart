@@ -318,10 +318,14 @@ class DownloadedEmbeddedCoverResolver {
   static void announcePreviewsCleared() => _previewsCleared.fire();
 
   /// Clears resolver state together with its App Cache-backed disk entries.
+  /// A forced library scan may retain content-verified FLAC previews; manual
+  /// cache clearing still deletes every preview by default.
   /// Running native work is generation-cancelled and awaited before the disk
   /// directory is wiped, so a completed clear leaves no late staging output.
   /// Follow it with [announcePreviewsCleared].
-  static Future<void> clearPersistentCache() async {
+  static Future<void> clearPersistentCache({
+    bool preserveVerifiedFlacPreviews = false,
+  }) async {
     final keys = <String>{..._cache.keys, ..._pendingExtract.keys};
     for (final key in keys) {
       _cacheGeneration[key] = (_cacheGeneration[key] ?? 0) + 1;
@@ -343,7 +347,10 @@ class DownloadedEmbeddedCoverResolver {
     final maintenance = _persistentMaintenanceFuture;
     if (maintenance != null) await maintenance;
     final directory = await _getPersistentCacheDirectory();
-    await _clearDirectoryContents(directory);
+    await _clearDirectoryContents(
+      directory,
+      preserveVerifiedFlacPreviews: preserveVerifiedFlacPreviews,
+    );
   }
 
   @visibleForTesting
@@ -696,19 +703,31 @@ class DownloadedEmbeddedCoverResolver {
         directory.path,
         _persistentFileName(cleanPath, modTime),
       );
-      // Without a timestamp a disk copy cannot be validated: it is extracted
-      // again once per memory miss and named by its content below.
-      // A FLAC picture may be retagged while the audio file retains its
-      // modification timestamp. Never trust a previous-session disk preview
-      // solely on that timestamp; re-read its embedded picture on cold cache.
-      if (!isLocalFlac(cleanPath) &&
-          modTime != null &&
+      // Local native FLAC artwork can be verified without decoding the image:
+      // hash the file's metadata, not its timestamp or the audio frames.
+      // Unreadable or nonstandard files keep the conservative extraction path.
+      final isFlac = isLocalFlac(cleanPath);
+      final fingerprint = isFlac
+          ? await _nativeFlacMetadataFingerprint(cleanPath)
+          : null;
+      if (!_isCurrentExtraction(job)) return null;
+      final verifiedPath = fingerprint == null
+          ? null
+          : p.join(
+              directory.path,
+              _persistentFileName(cleanPath, null, content: 'f1_$fingerprint'),
+            );
+      final reusablePath = isFlac
+          ? verifiedPath
+          : (modTime == null ? null : persistentPath);
+      if (reusablePath != null &&
           !job.forceRefresh &&
-          await _isReusablePersistentPreview(persistentPath, cleanPath)) {
+          await _isReusablePersistentPreview(reusablePath, cleanPath)) {
         if (!_isCurrentExtraction(job)) return null;
-        await _touchPersistentPreview(persistentPath);
+        await _touchPersistentPreview(reusablePath);
+        if (!_isCurrentExtraction(job)) return null;
         final next = _EmbeddedCoverCacheEntry(
-          previewPath: persistentPath,
+          previewPath: reusablePath,
           sourceModTimeMillis: modTime,
         );
         _touch(cleanPath, next);
@@ -716,8 +735,8 @@ class DownloadedEmbeddedCoverResolver {
         _confirmedWithoutEmbeddedCover.remove(cleanPath);
         _trimCacheIfNeeded();
         _notifyCoverChanged(job);
-        _schedulePersistentMaintenance();
-        return persistentPath;
+        // A cache hit adds no bytes, so do not sweep the entire disk cache.
+        return reusablePath;
       }
 
       outputPath = p.join(
@@ -773,16 +792,25 @@ class DownloadedEmbeddedCoverResolver {
       // A retagged FLAC can keep the same modification timestamp. Include
       // the actual picture digest in its preview filename so Flutter cannot
       // reuse decoded pixels from the old picture at the same file path.
-      final targetPath = modTime != null && !isLocalFlac(cleanPath) && !job.forceRefresh
-          ? persistentPath
-          : p.join(
-              directory.path,
-              _persistentFileName(
-                cleanPath,
-                modTime,
-                content: await _contentHash(outputPath),
-              ),
-            );
+      // Never associate a decoded preview with a fingerprint if the source
+      // changed during native extraction. A later request will read it again.
+      if (fingerprint != null &&
+          fingerprint != await _nativeFlacMetadataFingerprint(cleanPath)) {
+        await _cleanupCoverPath(outputPath);
+        if (_isCurrentExtraction(job)) _notifyCoverChanged(job);
+        return null;
+      }
+      final targetPath = verifiedPath ??
+          (modTime != null && !isFlac && !job.forceRefresh
+              ? persistentPath
+              : p.join(
+                  directory.path,
+                  _persistentFileName(
+                    cleanPath,
+                    modTime,
+                    content: await _contentHash(outputPath),
+                  ),
+                ));
       if (!_isCurrentExtraction(job)) {
         await _cleanupCoverPath(outputPath);
         return null;
@@ -882,6 +910,65 @@ class DownloadedEmbeddedCoverResolver {
     return '${_persistentCacheVersion}_${_stablePathHash(cleanPath)}_'
         '${(modTime ?? 0).toRadixString(16)}'
         '${content == null ? '' : '_$content'}.jpg';
+  }
+
+  /// A native FLAC begins with fLaC and a 34-byte STREAMINFO block. Walk
+  /// the bounded metadata chain, then stream its exact bytes into SHA-256.
+  /// This covers picture and comment blocks even when a tag editor preserves
+  /// the file's length and modification timestamp. Audio frames are not read.
+  /// Unsupported, malformed, oversized or SAF sources fall back to extraction.
+  static Future<String?> _nativeFlacMetadataFingerprint(String path) async {
+    if (isContentUri(path)) return null;
+    const maxMetadataBytes = 64 * 1024 * 1024;
+    const maxBlocks = 1024;
+    RandomAccessFile? input;
+    try {
+      final file = File(path);
+      final before = await file.stat();
+      if (before.type != FileSystemEntityType.file) return null;
+      input = await file.open();
+      final marker = await input.read(4);
+      if (marker.length != 4 ||
+          marker[0] != 0x66 ||
+          marker[1] != 0x4c ||
+          marker[2] != 0x61 ||
+          marker[3] != 0x43) {
+        return null;
+      }
+      var offset = 4;
+      for (var block = 0; block < maxBlocks; block++) {
+        final header = await input.read(4);
+        if (header.length != 4) return null;
+        final type = header[0] & 0x7f;
+        final length = (header[1] << 16) | (header[2] << 8) | header[3];
+        if (type == 127 ||
+            (block == 0 && (type != 0 || length != 34)) ||
+            (block != 0 && type == 0)) {
+          return null;
+        }
+        offset += 4 + length;
+        if (offset > maxMetadataBytes || offset > before.size) return null;
+        if ((header[0] & 0x80) != 0) {
+          final digest = await sha256.bind(file.openRead(0, offset)).first;
+          final after = await file.stat();
+          if (after.type != FileSystemEntityType.file ||
+              after.size != before.size ||
+              after.modified != before.modified ||
+              after.changed != before.changed) {
+            return null;
+          }
+          return digest.toString();
+        }
+        await input.setPosition(offset);
+      }
+    } catch (_) {
+      // An unsupported file must not accidentally validate an old preview.
+    } finally {
+      try {
+        await input?.close();
+      } catch (_) {}
+    }
+    return null;
   }
 
   static Future<String> _contentHash(String path) async {
@@ -1136,13 +1223,24 @@ class DownloadedEmbeddedCoverResolver {
     await deleteFileQuietly(file);
   }
 
-  static Future<void> _clearDirectoryContents(Directory directory) async {
+  static Future<void> _clearDirectoryContents(
+    Directory directory, {
+    bool preserveVerifiedFlacPreviews = false,
+  }) async {
     if (!await directory.exists()) {
       await directory.create(recursive: true);
       return;
     }
     try {
+      final verifiedName = RegExp(
+        r'^v4_[0-9a-f]{32}_0_f1_[0-9a-f]{64}\.jpg(?:\.source)?$',
+      );
       await for (final entity in directory.list(followLinks: false)) {
+        if (preserveVerifiedFlacPreviews &&
+            entity is File &&
+            verifiedName.hasMatch(p.basename(entity.path))) {
+          continue;
+        }
         try {
           await entity.delete(recursive: true);
         } catch (_) {}

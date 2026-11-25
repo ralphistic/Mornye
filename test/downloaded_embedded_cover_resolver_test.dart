@@ -37,6 +37,32 @@ void main() {
     return source.path;
   }
 
+  Future<void> writeNativeFlacFixture(String path, List<int> picture) async {
+    List<int> be32(int value) => [
+      (value >> 24) & 0xff,
+      (value >> 16) & 0xff,
+      (value >> 8) & 0xff,
+      value & 0xff,
+    ];
+    final block = [
+      ...be32(3),
+      ...be32(10),
+      ...ascii.encode('image/jpeg'),
+      ...be32(0),
+      ...List<int>.filled(16, 0),
+      ...be32(picture.length),
+      ...picture,
+    ];
+    await File(path).writeAsBytes([
+      ...ascii.encode('fLaC'),
+      0, 0, 0, 34,
+      ...List<int>.filled(34, 0),
+      0x86, ...be32(block.length).skip(1),
+      ...block,
+      0xff, 0xf8,
+    ]);
+  }
+
   tearDown(() async {
     await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting(
       preservePersistentFiles: false,
@@ -899,6 +925,94 @@ void main() {
       expect(refreshed, isNot(first));
       expect(await File(refreshed!).exists(), isTrue);
       expect(await File(first!).exists(), isFalse);
+    },
+  );
+
+  test(
+    'native FLAC reuses verified previews on restart and same-content rescan',
+    () async {
+      final source = await createAudioFixture('verified-flac');
+      var picture = <int>[11, 22, 33];
+      await writeNativeFlacFixture(source, picture);
+      final timestamp = await File(source).lastModified();
+      final originalLength = await File(source).length();
+      var extractions = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(backendChannel, (call) async {
+            expect(call.method, 'extractCoverToFile');
+            extractions++;
+            await File(
+              (call.arguments as Map)['output_path'] as String,
+            ).writeAsBytes(picture);
+            return jsonEncode({'success': true});
+          });
+
+      final first = (await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        source,
+      ))!;
+      expect(extractions, 1);
+      expect(await File(first).readAsBytes(), picture);
+
+      await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting();
+      expect(
+        await DownloadedEmbeddedCoverResolver.resolveOrExtract(source),
+        first,
+      );
+      expect(extractions, 1, reason: 'unchanged FLAC must not be re-extracted');
+
+      await DownloadedEmbeddedCoverResolver.clearPersistentCache(
+        preserveVerifiedFlacPreviews: true,
+      );
+      expect(
+        await DownloadedEmbeddedCoverResolver.resolveOrExtract(source),
+        first,
+      );
+      expect(extractions, 1, reason: 'unchanged FLAC survives full rescan');
+
+      // Same length AND preserved modification time cannot fool the key.
+      picture = <int>[44, 55, 66];
+      await writeNativeFlacFixture(source, picture);
+      await File(source).setLastModified(timestamp);
+      expect(await File(source).length(), originalLength);
+      expect(await File(source).lastModified(), timestamp);
+
+      await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting();
+      final changed = (await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        source,
+      ))!;
+      expect(extractions, 2);
+      expect(changed, isNot(first));
+      expect(await File(changed).readAsBytes(), picture);
+      expect(await File(first).exists(), isFalse);
+
+      await DownloadedEmbeddedCoverResolver.clearPersistentCache(
+        preserveVerifiedFlacPreviews: true,
+      );
+      expect(
+        await DownloadedEmbeddedCoverResolver.resolveOrExtract(source),
+        changed,
+      );
+      expect(extractions, 2);
+
+      // A same-timestamp edit followed by a full scan must also refresh.
+      picture = <int>[77, 88, 99];
+      await writeNativeFlacFixture(source, picture);
+      await File(source).setLastModified(timestamp);
+      await DownloadedEmbeddedCoverResolver.clearPersistentCache(
+        preserveVerifiedFlacPreviews: true,
+      );
+      final rescanned = (await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        source,
+      ))!;
+      expect(rescanned, isNot(changed));
+      expect(await File(rescanned).readAsBytes(), picture);
+      expect(extractions, 3);
+
+      // Manual Clear Cache must still remove the content-verified entries.
+      await DownloadedEmbeddedCoverResolver.clearPersistentCache();
+      expect(await persistentCacheDirectory.list().toList(), isEmpty);
+      await DownloadedEmbeddedCoverResolver.resolveOrExtract(source);
+      expect(extractions, 4);
     },
   );
 

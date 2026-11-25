@@ -335,9 +335,12 @@ extension _LocalLibraryScan on LocalLibraryNotifier {
           _log.i('Skipped $skippedDownloads files already in download history');
         }
         if (forceFullScan) {
-          // A forced scan rewrites thumbnails under their existing paths.
-          // Retagged FLAC files can also retain their original timestamps.
-          await DownloadedEmbeddedCoverResolver.clearPersistentCache();
+          // Invalidate in-memory resolutions, including same-timestamp edits.
+          // Content-verified FLAC previews can survive: their source metadata
+          // must match before reuse. Other preview types are still cleared.
+          await DownloadedEmbeddedCoverResolver.clearPersistentCache(
+            preserveVerifiedFlacPreviews: true,
+          );
           DownloadedEmbeddedCoverResolver.announcePreviewsCleared();
           PaintingBinding.instance.imageCache
             ..clear()

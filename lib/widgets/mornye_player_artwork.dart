@@ -46,6 +46,8 @@ class _MornyePlayerArtworkState extends ConsumerState<MornyePlayerArtwork> {
   Widget build(BuildContext context) {
     final cover = PlayerArtwork(
       artUri: widget.mediaItem.artUri?.toString(),
+      holdPendingArtwork: true,
+      embeddedArtworkPending: widget.mediaItem.extras?['embeddedArtworkPending'] == true,
       colorScheme: Theme.of(context).colorScheme,
       cacheWidth: PlayerArtwork.transitionCacheWidth(context),
       crossfade: widget.crossfade,

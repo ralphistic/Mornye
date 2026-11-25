@@ -21,6 +21,7 @@ import 'package:mornye/services/autoplay_ranker.dart';
 import 'package:mornye/services/autoplay_taste.dart';
 import 'package:mornye/services/background_favorites.dart';
 import 'package:mornye/services/cover_store.dart';
+import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
 import 'package:mornye/services/cast_output.dart';
 import 'package:mornye/services/history_database.dart';
 import 'package:mornye/services/library_collections_database.dart';
@@ -60,6 +61,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart'
     show databaseFactoryFfi, sqfliteFfiInit;
 
 import 'support/fixed_settings.dart';
+import 'support/prepared_playback_artwork_fixture.dart';
 import 'support/link_fakes.dart';
 import 'support/virtual_time.dart';
 
@@ -846,6 +848,78 @@ const _track = PlayableMedia(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('prepared iOS FLAC covers publish with each rapid transport change', () async {
+    final root = await Directory.systemTemp.createTemp('player-prepared-covers');
+    final calls = <String>[];
+    final songs = <PlayableMedia>[];
+    DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(
+      Directory('${root.path}/previews'),
+    );
+    mockPreparedArtworkExtraction(calls);
+    PlaybackArtworkCache.displayWidthForTesting = 64;
+    addTearDown(() async {
+      PlaybackArtworkCache.displayWidthForTesting = null;
+      await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting(
+        preservePersistentFiles: false,
+      );
+      DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(null);
+      clearPreparedArtworkExtraction();
+      await root.delete(recursive: true);
+    });
+    for (var i = 0; i < 8; i++) {
+      final source = File('${root.path}/track $i?.flac');
+      await writeArtworkFlac(source, await artworkPng(i));
+      songs.add(PlayableMedia(
+        id: 'track-$i', source: source.path, title: 'Track $i',
+        artist: 'Artist', duration: const Duration(seconds: 60),
+      ));
+    }
+    final handler = await _runtime(
+      isIOS: true,
+      settings: const AppSettings(pauseOnMute: false, gaplessPlayback: false,
+        autoplay: false, autoMix: false),
+    ).initialize();
+    await handler.setQueueAndPlay(songs);
+    // The actual transport, not the test, starts preparation of upcoming
+    // and preceding queue entries. At the initial position the 8 fit in
+    // the full-size decoded budget.
+    for (var i = 0; i < 400; i++) {
+      if (songs.every((s) => PlaybackArtworkCache.readyPath(s.source) != null) &&
+          handler.mediaItem.value?.artUri != null &&
+          handler.mediaItem.value?.extras?['embeddedArtworkPending'] != true) break;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    final expected = {
+      for (final song in songs) song.id:
+          Uri.file(PlaybackArtworkCache.readyPath(song.source)!),
+    };
+    final events = <MediaItem>[];
+    final subscription = handler.mediaItem.listen((item) {
+      if (item != null) events.add(item);
+    });
+    addTearDown(subscription.cancel);
+    for (var i = 1; i < songs.length; i++) {
+      await handler.skipToNext();
+      expect(handler.mediaItem.value!.id, songs[i].id);
+      expect(handler.mediaItem.value!.artUri, expected[songs[i].id]);
+    }
+    for (var i = songs.length - 2; i >= 0; i--) {
+      await handler.skipToPrevious();
+      expect(handler.mediaItem.value!.id, songs[i].id);
+      expect(handler.mediaItem.value!.artUri, expected[songs[i].id]);
+    }
+    await Future.wait([for (var i = 0; i < 5; i++) handler.skipToNext()]);
+    expect(handler.mediaItem.value!.id, songs[5].id);
+    await _settle();
+    expect(events, isNotEmpty);
+    for (final item in events) {
+      expect(item.artUri, expected[item.id], reason: item.id);
+      expect(item.extras?['embeddedArtworkPending'], isNot(true));
+    }
+    expect(calls, hasLength(songs.length),
+        reason: 'no repeated native extraction while skipping prewarmed tracks');
+  }, skip: Platform.isWindows);
 
   test('exclusive gapless advances metadata on one continuous deck', () async {
     final deck = _QueuedDeck();

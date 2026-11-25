@@ -1,7 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:mornye/models/library_database_models.dart';
+import 'package:mornye/services/library_database.dart';
+import 'package:mornye/services/restored_local_collections.dart';
 import 'package:mornye/models/library_collections.dart';
 import 'package:mornye/models/track.dart';
 import 'package:mornye/providers/music_player_provider.dart'
@@ -17,6 +22,7 @@ import 'package:mornye/utils/logger.dart';
 export 'package:mornye/models/library_collections.dart';
 
 final _log = AppLogger('LibraryCollections');
+const _pendingLocalRestoreKey = 'pending_restored_local_collections_v1';
 
 class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
   LibraryCollectionsNotifier({LibraryCollectionsDatabase? database})
@@ -845,7 +851,26 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
   Future<String> exportCollectionsJson() async {
     await _ensureLoaded();
     await ensurePlaylistsLoaded(state.playlists.map((playlist) => playlist.id));
-    return exportLibraryCollectionsJson(state);
+    final json = await exportLibraryCollectionsJson(state);
+    if (!Platform.isIOS) return json;
+    try {
+      final collections = jsonDecode(json) as Map<String, dynamic>;
+      final ids = {
+        for (final entry in restoredCollectionEntries(collections))
+          if (RestoredLocalTrack.fromEntry(entry) case final saved?) saved.track.id,
+      };
+      final rows = await LibraryDatabase.instance.getByIds(ids.toList());
+      final relative = <String, String>{};
+      for (final row in rows) {
+        final path = portableLocalTrackPath(row['filePath'] as String);
+        if (path != null) relative[row['id'] as String] = path;
+      }
+      attachPortableCollectionPaths(collections, relative);
+      return jsonEncode(collections);
+    } catch (error) {
+      _log.w('Could not add portable collection paths: $error');
+      return json;
+    }
   }
 
   /// Returns cover file references for the streaming ZIP backup format. The
@@ -925,10 +950,89 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
       normalized['playlists'] = rewritten;
     }
 
-    await _db.replaceAllFromBackup(normalized);
+    var restored = normalized;
+    List<RestoredLocalTrack> pending = const [];
+    if (Platform.isIOS) {
+      try {
+        final index = await _restoredLocalIndex();
+        final plan = planRestoredCollections(normalized, index);
+        restored = plan.collections;
+        pending = plan.pending;
+      } catch (error) {
+        // A library that is not scanned yet must not prevent restoration.
+        _log.w('Deferring restored local track matching: $error');
+        pending = restoredCollectionEntries(normalized)
+            .map(RestoredLocalTrack.fromEntry)
+            .whereType<RestoredLocalTrack>()
+            .toList();
+      }
+    }
+    await _db.replaceAllFromBackup(restored);
+    if (Platform.isIOS) await _savePendingLocalRestore(pending);
     await _load();
     _invalidatePlaylistPickerSummaries();
   });
+
+  Future<RestoredLocalTrackIndex> _restoredLocalIndex() async {
+    final items = <LocalLibraryItem>[];
+    const pageSize = 256;
+    for (var offset = 0; ; offset += pageSize) {
+      final rows = await LibraryDatabase.instance.getPage(
+        limit: pageSize, offset: offset,
+      );
+      items.addAll(rows.map(LocalLibraryItem.fromJson));
+      if (rows.length < pageSize) break;
+    }
+    return RestoredLocalTrackIndex(items);
+  }
+
+  Future<void> _savePendingLocalRestore(List<RestoredLocalTrack> pending) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (pending.isEmpty) {
+        await prefs.remove(_pendingLocalRestoreKey);
+      } else {
+        await prefs.setString(_pendingLocalRestoreKey,
+            jsonEncode(pending.map((entry) => entry.toEntry()).toList()));
+      }
+    } catch (error) {
+      _log.w('Could not save deferred collection matching: $error');
+    }
+  }
+
+  /// Called after a successful scan: only entries from an earlier restore
+  /// can be remapped. Never re-import a backup or resurrect deleted favorites.
+  Future<void> reconcilePendingRestoredLocalTracks() async {
+    if (!Platform.isIOS) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (!prefs.containsKey(_pendingLocalRestoreKey)) return;
+    await _mutate(() async {
+      final raw = prefs.getString(_pendingLocalRestoreKey);
+      if (raw == null) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return;
+      final pending = decoded.whereType<Map>()
+          .map(RestoredLocalTrack.fromEntry)
+          .whereType<RestoredLocalTrack>().toList();
+      final index = await _restoredLocalIndex();
+      final remaining = <RestoredLocalTrack>[];
+      final replacements = <String, Track>{};
+      for (final entry in pending) {
+        final match = index.match(entry);
+        if (match == null) {
+          remaining.add(entry);
+        } else {
+          replacements[entry.track.id] = match;
+        }
+      }
+      if (replacements.isNotEmpty) {
+        await _db.relinkRestoredLocalTracks(replacements);
+        await _load();
+        _invalidatePlaylistPickerSummaries();
+      }
+      await _savePendingLocalRestore(remaining);
+    });
+  }
 
   /// Reloads every collection after another writer (Mornye Link sync)
   /// changed the database. Queued behind pending mutations.

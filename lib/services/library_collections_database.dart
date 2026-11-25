@@ -9,6 +9,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:mornye/models/library_collections.dart';
 import 'package:mornye/models/track.dart';
 import 'package:mornye/services/collection_restore_codec.dart';
+import 'package:mornye/services/restored_local_collections.dart';
 import 'package:mornye/services/link/sync/link_collection_sync_schema.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/collection_track_batch.dart';
@@ -137,6 +138,67 @@ class LibraryCollectionsDatabase {
               where: 'rowid = ?',
               whereArgs: [row['rowid']],
             );
+          }
+        }
+      }
+    });
+  }
+
+  /// Relink only rows still present after a restore-before-scan. A duplicate
+  /// favorite collapses, while a playlist collision keeps its occurrence and
+  /// original added_at. No other rows or playlist covers are replaced.
+  Future<void> relinkRestoredLocalTracks(Map<String, Track> replacements) async {
+    if (replacements.isEmpty) return;
+    final db = await database;
+    await sqlite.transactionWithBusyRetry(db, (txn) async {
+      for (final table in [_tableWishlist, _tableLoved, _tablePlaylistTracks]) {
+        final playlist = table == _tablePlaylistTracks;
+        var after = 0;
+        while (true) {
+          final rows = await txn.query(
+            table,
+            columns: ['rowid', 'track_key', 'track_json', if (playlist) 'playlist_id'],
+            where: 'rowid > ?',
+            whereArgs: [after],
+            orderBy: 'rowid',
+            limit: 200,
+          );
+          if (rows.isEmpty) break;
+          after = rows.last['rowid'] as int;
+          for (final row in rows) {
+            final old = _decodeTrack(row['track_json']);
+            if (old == null || old.source != 'local') continue;
+            final updated = replacements[old.id];
+            if (updated == null) continue;
+            final key = row['track_key'] as String;
+            var next = remappedRestoredCollectionKey(key, old, updated);
+            Future<bool> occupied(String candidate) async =>
+                (await txn.query(
+                  table,
+                  columns: ['rowid'],
+                  where: playlist
+                      ? 'playlist_id = ? AND track_key = ? AND rowid != ?'
+                      : 'track_key = ? AND rowid != ?',
+                  whereArgs: [
+                    if (playlist) row['playlist_id'], candidate, row['rowid'],
+                  ],
+                  limit: 1,
+                )).isNotEmpty;
+            if (next != key && await occupied(next)) {
+              if (!playlist) {
+                await txn.delete(table, where: 'rowid = ?', whereArgs: [row['rowid']]);
+                continue;
+              }
+              final base = trackCollectionKey(updated);
+              var occurrence = 2;
+              do {
+                next = 'occurrence:${occurrence++}:$base';
+              } while (await occupied(next));
+            }
+            await txn.update(table, {
+              'track_key': next,
+              'track_json': jsonEncode(updated.toJson()),
+            }, where: 'rowid = ?', whereArgs: [row['rowid']]);
           }
         }
       }

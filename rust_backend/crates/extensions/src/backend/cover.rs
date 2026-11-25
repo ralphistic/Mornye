@@ -978,7 +978,11 @@ pub(super) mod tests {
         let backend = backend(directory.path());
         let data = directory.path().join("data");
         let cache = data.join("covers");
-        let audio = data.join("track.flac");
+        let audio = data.join(if cfg!(windows) {
+            "Continue #1 100% 日本語.flac"
+        } else {
+            "Continue? #1 100% 日本語.flac"
+        });
         let first = artwork(101, 32);
         let second = artwork(102, 32);
         let scan = || {
@@ -995,8 +999,17 @@ pub(super) mod tests {
                 .unwrap()
         };
         std::fs::write(&audio, flac_with_picture(&first)).unwrap();
+        let output = data.join("preview.jpg");
+        backend
+            .extract_cover_to_file(audio.to_str().unwrap(), output.to_str().unwrap(), &|| Ok(()))
+            .unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), first);
         let old_path = scan();
         std::fs::write(&audio, flac_with_picture(&second)).unwrap();
+        backend
+            .extract_cover_to_file(audio.to_str().unwrap(), output.to_str().unwrap(), &|| Ok(()))
+            .unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), second);
         let new_path = scan();
         assert_ne!(old_path, new_path);
         assert_eq!(

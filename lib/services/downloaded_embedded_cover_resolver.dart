@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data' as typed;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -10,8 +11,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:crypto/crypto.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/utils/file_access.dart';
+import 'package:mornye/utils/playback_artwork.dart';
 
 part 'downloaded_embedded_cover_resolver_song_rows.dart';
+part 'downloaded_embedded_cover_resolver_playback.dart';
 
 class _EmbeddedCoverCacheEntry {
   final String previewPath;
@@ -130,10 +133,7 @@ class DownloadedEmbeddedCoverResolver {
   /// may end in .flac but must keep their provider artwork instead.
   static bool isLocalFlac(String? filePath) {
     final path = cleanFilePath(filePath);
-    return path.toLowerCase().endsWith('.flac') &&
-        (path.startsWith('content://') ||
-            p.isAbsolute(path) ||
-            p.windows.isAbsolute(path));
+    return isLocalFlacArtworkSource(path);
   }
 
   /// Single display policy for a local FLAC: its embedded picture wins over
@@ -285,6 +285,7 @@ class DownloadedEmbeddedCoverResolver {
     }
 
     _pendingRefresh.add(cleanPath);
+    PlaybackArtworkCache.invalidate(cleanPath);
     await SongListArtworkCache._invalidate(cleanPath);
     _failedExtract.remove(cleanPath);
     _confirmedWithoutEmbeddedCover.remove(cleanPath);
@@ -295,6 +296,7 @@ class DownloadedEmbeddedCoverResolver {
     final cleanPath = cleanFilePath(filePath);
     if (cleanPath.isEmpty) return;
 
+    PlaybackArtworkCache.invalidate(cleanPath);
     final rowInvalidation = SongListArtworkCache._invalidate(cleanPath);
     _cacheGeneration[cleanPath] = (_cacheGeneration[cleanPath] ?? 0) + 1;
     final cached = _cache.remove(cleanPath);
@@ -332,6 +334,7 @@ class DownloadedEmbeddedCoverResolver {
   static Future<void> clearPersistentCache({
     bool preserveVerifiedFlacPreviews = false,
   }) async {
+    PlaybackArtworkCache._suspend();
     await SongListArtworkCache._suspend();
     try {
       final keys = <String>{..._cache.keys, ..._pendingExtract.keys};
@@ -361,6 +364,7 @@ class DownloadedEmbeddedCoverResolver {
       );
     } finally {
       SongListArtworkCache._resume(verifyContent: preserveVerifiedFlacPreviews);
+      PlaybackArtworkCache._resume();
     }
   }
 
@@ -369,6 +373,7 @@ class DownloadedEmbeddedCoverResolver {
     if (_activeExtractions != 0 || _pendingExtract.isNotEmpty) {
       throw StateError('Cannot replace persistent cache while work is active');
     }
+    PlaybackArtworkCache.clear();
     SongListArtworkCache._resetForTesting();
     _persistentCacheDirectoryOverride = directory;
     _persistentCacheRootFuture = null;
@@ -382,6 +387,7 @@ class DownloadedEmbeddedCoverResolver {
   static Future<void> resetMemoryStateForTesting({
     bool preservePersistentFiles = true,
   }) async {
+    PlaybackArtworkCache.clear();
     await SongListArtworkCache._suspend();
     SongListArtworkCache._resume(verifyContent: false);
     final maintenance = _persistentMaintenanceFuture;
@@ -575,6 +581,7 @@ class DownloadedEmbeddedCoverResolver {
   static Future<String?> _ensureCover(
     String cleanPath, {
     bool forceRefresh = false,
+    bool verifyExistingFlac = false,
     int? knownModTime,
     VoidCallback? onChanged,
     bool isForeground = false,
@@ -595,10 +602,10 @@ class DownloadedEmbeddedCoverResolver {
     }
 
     final cached = _cache[cleanPath];
-    if (!forceRefresh && cached != null) {
+    if (!forceRefresh && !verifyExistingFlac && cached != null) {
       return Future<String?>.value(cached.previewPath);
     }
-    if (!forceRefresh && _failedExtract.containsKey(cleanPath)) {
+    if (!forceRefresh && !verifyExistingFlac && _failedExtract.containsKey(cleanPath)) {
       // A SAF provider may temporarily be offline or still opening its remote
       // file. Do not turn that failure into "no artwork" for the whole session.
       // Retry on demand, with a cooldown so scrolling cannot flood the NAS.

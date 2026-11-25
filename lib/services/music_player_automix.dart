@@ -483,6 +483,7 @@ class _MusicAutoMix {
       handler._covers
         ..fetchFor(next)
         ..fetchAhead();
+      handler._warmPlaybackArtwork();
       // A song without a listed cover shows its embedded one, as when it
       // starts without a mix.
       unawaited(

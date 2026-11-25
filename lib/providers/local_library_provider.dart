@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:mornye/models/library_scan_failure.dart';
 import 'package:mornye/models/track.dart';
 import 'package:mornye/providers/library_album_artwork_provider.dart';
+import 'package:mornye/providers/library_collections_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/services/cover_store.dart';
 import 'package:mornye/services/library_cleanup.dart';

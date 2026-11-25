@@ -175,6 +175,8 @@ class MusicPlayerHandler extends BaseAudioHandler
   int _playRequestGeneration = 0;
   int _queueGeneration = 0;
   int _playbackInstance = 0;
+  int _artworkWarmRevision = 0;
+  int _artworkRequestRevision = 0;
   final _metadataChanges = <String, Object>{};
   String? _activeResolvedPath;
   bool _disposed = false;
@@ -395,17 +397,60 @@ class MusicPlayerHandler extends BaseAudioHandler
     }
   }
 
-  MediaItem _toMediaItem(PlayableMedia media, {String? resolvedSource}) =>
-      media.toMediaItem(
-        resolvedSource: resolvedSource,
-        unknownTitle: _runtime.unknownTitle,
-        unknownArtist: _runtime.unknownArtist,
-        covers: _dependencies.coverStore,
-        playbackInstance: _playbackInstance,
-        suppressArtwork: DownloadedEmbeddedCoverResolver.isLocalFlac(
-          media.source,
-        ),
-      );
+  bool _preparesPlaybackArtwork(PlayableMedia media) =>
+      _dependencies.isIOS && PlaybackArtworkCache.supports(media.source);
+
+  MediaItem _toMediaItem(PlayableMedia media, {String? resolvedSource}) {
+    final prepares = _preparesPlaybackArtwork(media);
+    final ready = prepares ? PlaybackArtworkCache.readyPath(media.source) : null;
+    final item = media.toMediaItem(
+      resolvedSource: resolvedSource,
+      resolvedArtwork: ready == null ? null : Uri.file(ready).toString(),
+      unknownTitle: _runtime.unknownTitle,
+      unknownArtist: _runtime.unknownArtist,
+      covers: _dependencies.coverStore,
+      playbackInstance: _playbackInstance,
+      suppressArtwork: ready == null &&
+          DownloadedEmbeddedCoverResolver.isLocalFlac(media.source),
+    );
+    return prepares
+        ? item.copyWith(extras: {
+            ...?item.extras,
+            'embeddedArtworkPending': ready == null,
+          })
+        : item;
+  }
+
+  /// Start work before transport publishes a new song. Warm nearest tracks
+  /// first in both directions; never await artwork in the audio start path.
+  void _warmPlaybackArtwork() {
+    if (!_dependencies.isIOS || _disposed || _index < 0 ||
+        _index >= _media.length) return;
+    final revision = ++_artworkWarmRevision;
+    final center = _index;
+    final paths = <String>{};
+    void add(int index) {
+      if (index >= 0 && index < _media.length) {
+        final media = _media[index];
+        if (_preparesPlaybackArtwork(media)) paths.add(media.source);
+      }
+    }
+    add(center);
+    final ahead = PlaybackArtworkCache.lookAhead;
+    for (var offset = 1; offset <= ahead; offset++) {
+      add(center + offset);
+      if (offset <= 3) add(center - offset);
+    }
+    unawaited(() async {
+      final ordered = paths.toList(growable: false);
+      for (var i = 0; i < ordered.length; i += 2) {
+        if (_disposed || revision != _artworkWarmRevision) return;
+        await Future.wait(ordered.skip(i).take(2).map(
+          (source) => PlaybackArtworkCache.prepare(source),
+        ));
+      }
+    }());
+  }
 
   void _init() {
     if (_initialized) return;
@@ -517,7 +562,21 @@ class MusicPlayerHandler extends BaseAudioHandler
   }
 
   @override
+  void didHaveMemoryPressure() {
+    _artworkWarmRevision++;
+    PlaybackArtworkCache.clear();
+  }
+
+  @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _dependencies.isIOS &&
+        _index >= 0 && _index < _media.length) {
+      PlaybackArtworkCache.clear();
+      _warmPlaybackArtwork();
+      if (_preparesPlaybackArtwork(_media[_index])) {
+        unawaited(_recoverEmbeddedArtwork(_media[_index], _playRequestGeneration));
+      }
+    }
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
       unawaited(_runtime.personalization.flush());
@@ -1558,7 +1617,10 @@ class MusicPlayerHandler extends BaseAudioHandler
 
   Future<void> _cleanupPendingResolvedPaths() => _sourceCache.releaseUnpinned();
 
-  void _markSessionQueueChanged() => _sessionWriter.queueChanged();
+  void _markSessionQueueChanged() {
+    _sessionWriter.queueChanged();
+    _warmPlaybackArtwork();
+  }
 
   PlaybackSessionQueue _sessionQueue() {
     final media = List.of(_media);
@@ -1749,6 +1811,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       _sessionWriter.queueRestored(needsRewrite: queueNeedsRewrite);
       queue.add(List<MediaItem>.unmodifiable(_queueItems));
       mediaItem.add(_toMediaItem(_media[_index]));
+      _warmPlaybackArtwork();
       _covers.fetchFor(_media[_index]);
       if (position > Duration.zero) {
         playbackState.add(
@@ -2015,6 +2078,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     // Advance the requested index synchronously so consecutive Next taps do
     // not all target the same song while AutoMix/source preparation awaits.
     _index = index;
+    _warmPlaybackArtwork();
     unawaited(_autoplay.fill());
     final media = _media[index];
     _switchingGeneration = generation;
@@ -2445,6 +2509,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     PlayableMedia media,
     int generation,
   ) async {
+    final artworkRevision = ++_artworkRequestRevision;
     if (_runtime.arrivingFile(media.source) case final arriving?) {
       try {
         await arriving.done;
@@ -2453,18 +2518,32 @@ class MusicPlayerHandler extends BaseAudioHandler
       }
       if (!_isCurrentPlayRequest(generation, media)) return;
     }
+    final prepares = _preparesPlaybackArtwork(media);
     final artwork = await resolveEmbeddedArtworkUri(
       media.source,
       media.artUri,
-      extract: (source) => DownloadedEmbeddedCoverResolver.resolveOrExtract(
-        source,
-        requireFreshExtraction: true,
-      ),
+      extract: (source) => prepares
+          ? PlaybackArtworkCache.prepare(source)
+          : DownloadedEmbeddedCoverResolver.resolveOrExtract(
+              source,
+              requireFreshExtraction: true,
+            ),
     );
-    if (artwork == null || !_isCurrentPlayRequest(generation, media)) return;
+    if (artworkRevision != _artworkRequestRevision ||
+        !_isCurrentPlayRequest(generation, media)) return;
+    if (artwork == null && !prepares) return;
     final current = mediaItem.value;
-    if (current == null) return;
-    final updated = current.copyWith(artUri: Uri.parse(artwork));
+    if (current == null || current.extras?['source'] != media.source) return;
+    final uri = artwork == null ? null : Uri.parse(artwork);
+    if (current.artUri == uri &&
+        current.extras?['embeddedArtworkPending'] != true) return;
+    final updated = current.copyWith(
+      artUri: uri,
+      extras: {
+        ...?current.extras,
+        if (prepares) 'embeddedArtworkPending': false,
+      },
+    );
     mediaItem.add(updated);
     _media[_index] = PlayableMedia.fromJson({
       ..._media[_index].toJson(),
@@ -3072,6 +3151,10 @@ class MusicPlayerHandler extends BaseAudioHandler
     // old tags, lyrics too, from that copy again.
     await _retireTaggedCopies(source);
     if (_disposed || !_media.any((item) => item.source == source)) return;
+    PlaybackArtworkCache.invalidate(source);
+    if (_index >= 0 && _index < _media.length && _media[_index].source == source) {
+      _artworkRequestRevision++;
+    }
     final token = Object();
     _metadataChanges[source] = token;
     try {
@@ -3152,6 +3235,10 @@ class MusicPlayerHandler extends BaseAudioHandler
         _markSessionQueueChanged();
         queue.add(List.unmodifiable(_queueItems));
         await _persistSession(position: playbackState.value.position);
+        if (_index >= 0 && _index < _media.length &&
+            _media[_index].source == source && _preparesPlaybackArtwork(_media[_index])) {
+          unawaited(_recoverEmbeddedArtwork(_media[_index], _playRequestGeneration));
+        }
       }
     } finally {
       if (identical(_metadataChanges[source], token)) {
@@ -3297,6 +3384,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     _autoplay.reset();
     _prefetch.stop();
     _disposed = true;
+    _artworkWarmRevision++;
     playbackSpeed.removeListener(_tempoChanged);
     playbackTempoSupportRevision.removeListener(_tempoChanged);
     usbAudioStatus.removeListener(refreshPlaybackOutput);

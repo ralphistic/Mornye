@@ -662,6 +662,15 @@ extension _LocalLibraryScan on LocalLibraryNotifier {
     if (pruneCoverCache) await _pruneLibraryCoverCache();
     if (!ref.mounted) return;
     unawaited(ref.read(libraryAlbumArtworkProvider.notifier).restoreMissing());
+    if (Platform.isIOS) {
+      try {
+        await ref.read(libraryCollectionsProvider.notifier)
+            .reconcilePendingRestoredLocalTracks();
+      } catch (error) {
+        _log.w('Deferred local collection matching failed: $error');
+      }
+    }
+    if (!ref.mounted) return;
 
     final message = summary();
     if (state.scanErrorCount > 0) {

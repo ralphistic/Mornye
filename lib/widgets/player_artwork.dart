@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:ui' as ui;
+
+import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:material_ui/material_ui.dart';
@@ -35,6 +38,11 @@ class PlayerArtwork extends StatelessWidget {
   /// cannot load. Not read with [crossfade].
   final String? songFile;
 
+  /// Null artwork during a native FLAC preparation is not confirmed absence.
+  /// Keep the last visual only until the current song's result arrives.
+  final bool embeddedArtworkPending;
+  final bool holdPendingArtwork;
+
   const PlayerArtwork({
     super.key,
     required this.artUri,
@@ -44,6 +52,8 @@ class PlayerArtwork extends StatelessWidget {
     this.crossfade,
     this.crossfadeScale,
     this.songFile,
+    this.embeddedArtworkPending = false,
+    this.holdPendingArtwork = false,
   });
 
   /// Share one full-size decode while artwork moves between player panels.
@@ -80,12 +90,23 @@ class PlayerArtwork extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (holdPendingArtwork) {
+      return _PendingPlayerCover(
+        uri: artUri,
+        pending: embeddedArtworkPending,
+        builder: _buildCover,
+      );
+    }
+    return _buildCover(context, artUri);
+  }
+
+  Widget _buildCover(BuildContext context, String? uri) {
     final motion = crossfade;
     if (motion != null &&
         motion.duration > Duration.zero &&
         !MediaQuery.disableAnimationsOf(context)) {
       return _ArtworkCrossfade(
-        artUri: artUri,
+        artUri: uri,
         motion: motion,
         scale: crossfadeScale,
         builder: _layer,
@@ -93,7 +114,8 @@ class PlayerArtwork extends StatelessWidget {
     }
     final placeholder = _placeholder();
 
-    final uri = artUri;
+    final prepared = _prepared(uri);
+    if (prepared != null) return prepared;
     if (isHttpCoverUrl(uri)) {
       return CachedNetworkImage(
         imageUrl: uri!,
@@ -109,19 +131,33 @@ class PlayerArtwork extends StatelessWidget {
     }
     final image = coverImageProvider(uri, cacheWidth: cacheWidth);
     if (image == null) {
-      return pendingCover(uri, placeholder: placeholder, builder: build);
+      return pendingCover(uri, placeholder: placeholder,
+          builder: (context) => _buildCover(context, uri));
     }
     return Image(
       image: image,
       fit: BoxFit.cover,
-      gaplessPlayback: false,
+      gaplessPlayback: true,
       errorBuilder: (_, _, _) => _unavailable(placeholder),
     );
+  }
+
+  Widget? _prepared(String? uri) {
+    final path = coverFilePath(uri);
+    if (path == null || !PlaybackArtworkCache.hasImage(path, cacheWidth)) {
+      return null;
+    }
+    return _PreparedPlaybackImage(path: path, width: cacheWidth!);
   }
 
   /// One cover of a crossfade. [onShown] runs once it shows something final:
   /// its first frame, an error or the placeholder of a cover without image.
   Widget _layer(BuildContext context, String? uri, VoidCallback onShown) {
+    final prepared = _prepared(uri);
+    if (prepared != null) {
+      onShown();
+      return prepared;
+    }
     final placeholder = _placeholder();
     final image = coverImageProvider(uri, cacheWidth: cacheWidth);
     if (image == null) {
@@ -145,6 +181,77 @@ class PlayerArtwork extends StatelessWidget {
         onShown();
         return placeholder;
       },
+    );
+  }
+}
+
+class _PendingPlayerCover extends StatefulWidget {
+  const _PendingPlayerCover({
+    required this.uri,
+    required this.pending,
+    required this.builder,
+  });
+  final String? uri;
+  final bool pending;
+  final Widget Function(BuildContext, String?) builder;
+
+  @override
+  State<_PendingPlayerCover> createState() => _PendingPlayerCoverState();
+}
+
+class _PendingPlayerCoverState extends State<_PendingPlayerCover> {
+  String? _last;
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.pending || widget.uri != null) _last = widget.uri;
+    return widget.builder(context, widget.pending ? widget.uri ?? _last : widget.uri);
+  }
+}
+
+class _PreparedPlaybackImage extends StatefulWidget {
+  const _PreparedPlaybackImage({required this.path, required this.width});
+  final String path;
+  final int width;
+
+  @override
+  State<_PreparedPlaybackImage> createState() => _PreparedPlaybackImageState();
+}
+
+class _PreparedPlaybackImageState extends State<_PreparedPlaybackImage> {
+  ui.Image? _image;
+  @override
+  void initState() {
+    super.initState();
+    _image = PlaybackArtworkCache.imageForPath(widget.path, widget.width);
+  }
+
+  @override
+  void didUpdateWidget(covariant _PreparedPlaybackImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.path == widget.path && oldWidget.width == widget.width &&
+        _image != null) return;
+    final next = PlaybackArtworkCache.imageForPath(widget.path, widget.width);
+    _image?.dispose();
+    _image = next;
+  }
+
+  @override
+  void dispose() {
+    _image?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final image = _image;
+    if (image != null) {
+      return RawImage(image: image, fit: BoxFit.cover,
+          filterQuality: ui.FilterQuality.medium);
+    }
+    return Image(
+      image: coverImageProvider(widget.path, cacheWidth: widget.width)!,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
     );
   }
 }

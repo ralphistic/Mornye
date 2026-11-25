@@ -144,6 +144,29 @@ void main() {
     },
   );
 
+  test('literal punctuation and Unicode do not turn local FLAC paths into URLs', () async {
+    final old = File('${directory.path}/old.png');
+    final fresh = File('${directory.path}/fresh.png');
+    await old.writeAsBytes([1]);
+    await fresh.writeAsBytes([2]);
+    for (final name in [
+      '12-65. Continue?.flac',
+      '4-31. Kirby Wins!.flac',
+      'Song #1 100% é 日本語.FLAC',
+      'literal%3F.flac',
+    ]) {
+      final source = '${directory.path}/$name';
+      expect(isLocalFlacArtworkSource(source), isTrue);
+      expect(await resolveEmbeddedArtworkUri(source, old.path, extract: (path) async {
+        expect(path, source);
+        return fresh.path;
+      }), fresh.uri.toString());
+    }
+    expect(isLocalFlacArtworkSource('content://docs/music/song.flac?token=x'), isTrue);
+    expect(isLocalFlacArtworkSource('https://host/music/song.flac?x=1'), isFalse);
+    expect(isLocalFlacArtworkSource('/music/file?.mp3'), isFalse);
+  });
+
   test(
     'restored queue replaces a removed scan cover with current Library art',
     () async {

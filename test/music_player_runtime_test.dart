@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mornye/controllers/player_metadata_controller.dart';
 import 'package:mornye/models/library_collections.dart';
 import 'package:mornye/models/settings.dart';
@@ -203,6 +204,35 @@ class _CastDeck extends _Deck {
     await states.close();
     await completions.close();
     await super.dispose();
+  }
+}
+
+class _TransitionDeck extends _CastDeck {
+  Completer<void>? nextSourceGate;
+  final nextSourceStarted = Completer<void>();
+
+  @override
+  Future<void> setFileSource(
+    String path, {
+    bool preferBitPerfect = false,
+    bool directUsb = false,
+    bool allowDop = false,
+    bool requiresDsd = false,
+    bool allowFixedVolume = false,
+    bool dapExclusive = false,
+    int usbMaxSampleRate = 0,
+    bool usbDitherHighPass = false,
+  }) async {
+    await super.setFileSource(path,
+      preferBitPerfect: preferBitPerfect, directUsb: directUsb,
+      allowDop: allowDop, requiresDsd: requiresDsd,
+      allowFixedVolume: allowFixedVolume, dapExclusive: dapExclusive,
+      usbMaxSampleRate: usbMaxSampleRate, usbDitherHighPass: usbDitherHighPass,
+    );
+    if (nextSourceGate case final gate?) {
+      if (!nextSourceStarted.isCompleted) nextSourceStarted.complete();
+      await gate.future;
+    }
   }
 }
 
@@ -848,6 +878,151 @@ const _track = PlayableMedia(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  group('iOS playback continuity', () {
+    late Directory root;
+    late List<PlayableMedia> songs;
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    const paths = MethodChannel('plugins.flutter.io/path_provider');
+    const transition = MethodChannel('xyz.luan/audioplayers.global');
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      root = await Directory.systemTemp.createTemp('ios-playback-continuity-');
+      messenger.setMockMethodCallHandler(paths, (_) async => root.path);
+      songs = [
+        for (var i = 0; i < 3; i++)
+          PlayableMedia(
+            id: 'continuity-$i',
+            source: (await File('${root.path}/song-$i.m4a').writeAsString('audio')).path,
+            title: 'Track $i', artist: 'Artist', album: 'Album',
+            artUri: 'https://example.com/cover.jpg',
+            duration: const Duration(seconds: 60),
+          ),
+      ];
+    });
+
+    tearDown(() async {
+      messenger.setMockMethodCallHandler(paths, null);
+      messenger.setMockMethodCallHandler(transition, null);
+      await root.delete(recursive: true);
+    });
+
+    Future<void> until(bool Function() ready) async {
+      for (var i = 0; i < 200; i++) {
+        if (ready()) return;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      fail('Playback continuity condition not reached');
+    }
+
+    test('pause, seek and app relaunch restore the exact queue and playhead', () async {
+      sqfliteFfiInit();
+      final db = await AppStateDatabase.openWithFactory(databaseFactoryFfi, '${root.path}/state.db');
+      addTearDown(db.close);
+      final store = AppStateDatabase.withDatabase(db);
+      final decks = <_Deck>[];
+      final first = _runtime(isIOS: true, sessionDatabase: store, decks: decks);
+      final player = await first.initialize();
+      await player.setQueueAndPlay(songs, initialIndex: 1, shuffle: true);
+      await player.setRepeatMode(AudioServiceRepeatMode.all);
+      decks.single.position = const Duration(milliseconds: 23175);
+      await player.pause();
+      expect((await store.getPlaybackSession())?['positionMs'], 23175);
+      expect(player.playbackState.value.updatePosition.inMilliseconds, 23175);
+      const target = Duration(milliseconds: 34781);
+      await player.seek(target);
+      expect((await store.getPlaybackSession())?['positionMs'], target.inMilliseconds);
+      player.didChangeAppLifecycleState(AppLifecycleState.inactive);
+      player.didChangeAppLifecycleState(AppLifecycleState.paused);
+      await player.persistCurrentSession();
+      await first.dispose();
+
+      // A suspended audio session can deliver an interruption before the
+      // newly initialized handler has loaded any of its persisted queue.
+      final session = _Session();
+      final freshDecks = <_Deck>[];
+      final fresh = _runtime(isIOS: true, session: session, sessionDatabase: store,
+        decks: freshDecks);
+      final restored = await fresh.initialize();
+      await _settle();
+      session.interruptions.add(AudioInterruptionEvent(true, AudioInterruptionType.unknown));
+      await _settle();
+      expect(await store.getPlaybackSession(), isNotNull,
+        reason: 'startup interruption must not erase the saved session');
+      await fresh.restoreSession();
+      expect(restored.mediaItem.value?.id, songs[1].id);
+      expect(restored.queue.value.map((item) => item.id), songs.map((song) => song.id));
+      expect(restored.playbackState.value.updatePosition, target);
+      expect(restored.playbackState.value.playing, isFalse);
+      expect(restored.playbackState.value.shuffleMode, AudioServiceShuffleMode.all);
+      expect(restored.playbackState.value.repeatMode, AudioServiceRepeatMode.all);
+      expect(freshDecks.single.sources, isEmpty);
+      expect(session.activations, isEmpty);
+      await restored.play();
+      expect(freshDecks.single.position, target);
+      expect(restored.playbackState.value.playing, isTrue);
+    });
+
+    test('completion keeps controls active through next-source preparation', () async {
+      final methods = <MethodCall>[];
+      messenger.setMockMethodCallHandler(transition, (call) async {
+        methods.add(call);
+        return call.method == 'musicTransitionTicket' ? 17 : null;
+      });
+      final deck = _TransitionDeck();
+      final player = await _runtime(
+        isIOS: true,
+        createDeck: (_) => deck,
+        settings: const AppSettings(pauseOnMute: false, gaplessPlayback: false,
+          autoplay: false, autoMix: false),
+      ).initialize();
+      await player.setQueueAndPlay(songs);
+      final states = <PlaybackState>[];
+      final subscription = player.playbackState.listen(states.add);
+      addTearDown(subscription.cancel);
+      final gate = deck.nextSourceGate = Completer<void>();
+      try {
+        deck.complete();
+        await deck.nextSourceStarted.future.timeout(const Duration(seconds: 3));
+        expect(player.mediaItem.value?.id, songs[1].id);
+        expect(player.playbackState.value.playing, isTrue);
+        expect(player.playbackState.value.processingState, AudioProcessingState.loading);
+        expect(methods.map((call) => call.method), ['musicTransitionTicket']);
+        expect(states.every((state) => state.playing &&
+          state.processingState != AudioProcessingState.idle), isTrue);
+      } finally {
+        gate.complete();
+      }
+      await until(() => methods.any((call) => call.method == 'finishMusicTransition'));
+      expect(deck.state, PlaybackDeckState.playing);
+      expect(player.playbackState.value.processingState, AudioProcessingState.ready);
+      expect(methods.last.arguments, {'token': 17});
+      expect(states.every((state) => state.playing), isTrue);
+    });
+
+    test('real audio interruption and explicit pause never advance the queue', () async {
+      final session = _Session();
+      final deck = _CastDeck();
+      final player = await _runtime(
+        isIOS: true, session: session, createDeck: (_) => deck,
+        settings: const AppSettings(pauseOnMute: false, gaplessPlayback: false,
+          autoplay: false, autoMix: false),
+      ).initialize();
+      await player.setQueueAndPlay(songs);
+      session.interruptions.add(AudioInterruptionEvent(true, AudioInterruptionType.pause));
+      await until(() => !player.playbackState.value.playing);
+      deck.complete();
+      await _settle();
+      expect(player.mediaItem.value?.id, songs.first.id);
+      expect(player.playbackState.value.playing, isFalse);
+      await player.pause();
+      session.interruptions.add(AudioInterruptionEvent(false, AudioInterruptionType.pause));
+      await _settle();
+      expect(player.mediaItem.value?.id, songs.first.id);
+      expect(player.playbackState.value.playing, isFalse);
+    });
+  });
 
   test('prepared iOS FLAC covers publish with each rapid transport change', () async {
     final root = await Directory.systemTemp.createTemp('player-prepared-covers');

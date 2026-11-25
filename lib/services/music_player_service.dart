@@ -2766,8 +2766,12 @@ class MusicPlayerHandler extends BaseAudioHandler
 
     _completing = true;
     try {
+      final generation = _playRequestGeneration;
       _runtime.personalization.finish();
       if (await _gapless.handoff()) return;
+      if (_disposed || generation != _playRequestGeneration || _shouldIgnoreComplete) {
+        return;
+      }
       await _onComplete();
     } finally {
       _completing = false;

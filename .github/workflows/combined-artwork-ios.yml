@@ -56,11 +56,14 @@ jobs:
         with:
           workspaces: rust_backend
       - name: ICC and core artwork regression
-        run: cargo test --locked -p mornye-core cover:: -- --nocapture
+        run: |
+          cargo test --locked -p mornye-core cover:: -- --nocapture
       - name: Thumbnail freshness regression
-        run: cargo test --locked -p mornye-extensions backend::cover::tests:: -- --nocapture
+        run: |
+          cargo test --locked -p mornye-extensions backend::cover::tests:: -- --nocapture
       - name: Library scan regression
-        run: cargo test --locked -p mornye-extensions backend::library::scan::tests:: -- --nocapture
+        run: |
+          cargo test --locked -p mornye-extensions backend::library::scan::tests:: -- --nocapture
   test-and-build:
     needs: [dart-artwork, rust-artwork]
     runs-on: xcode-27

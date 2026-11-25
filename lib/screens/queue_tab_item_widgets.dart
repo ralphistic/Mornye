@@ -1,5 +1,10 @@
 part of 'queue_tab.dart';
 
+bool _isArtworkHttpUrl(String source) {
+  final uri = Uri.tryParse(source);
+  return uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+}
+
 extension _QueueTabItemWidgets on _QueueTabState {
   Widget _buildSelectionBottomBar(
     BuildContext context,
@@ -735,7 +740,9 @@ extension _QueueTabItemWidgets on _QueueTabState {
     final badgeInset = size == null ? 4.0 : 0.0;
 
     // Scanned SAF tracks also recover artwork after a transient provider error.
-    if (isDownloaded || item.filePath.startsWith('content://')) {
+    if (isDownloaded ||
+        item.filePath.startsWith('content://') ||
+        DownloadedEmbeddedCoverResolver.isLocalFlac(item.filePath)) {
       return OfflineAvailabilityCover(
         item: item,
         inset: badgeInset,
@@ -818,22 +825,13 @@ extension _QueueTabItemWidgets on _QueueTabState {
     Widget fadeInFileImage(Widget child, int? frame, bool wasSync) {
       if (wasSync) return child;
       final Widget backdrop;
-      if (isDownloaded && item.coverUrl != null) {
-        backdrop = CachedCoverImage(
-          imageUrl: item.coverUrl!,
-          width: size,
-          height: size,
-          memCacheWidth: cacheSize,
-          placeholder: (context, url) =>
-              buildPlaceholder(recoverDocument: false),
-          errorWidget: (context, url, error) => buildPlaceholder(),
-        );
-      } else {
-        backdrop = buildPlaceholder(
-          isLocal: !isDownloaded,
-          recoverDocument: false,
-        );
-      }
+      // The song list must never show a remote/stored cover behind the
+      // authoritative embedded picture while its file image decodes.
+      // That fallback can be an older design even for a newly imported song.
+      backdrop = buildPlaceholder(
+        isLocal: !isDownloaded,
+        recoverDocument: false,
+      );
       final animated = _LocalCoverFade(
         loaded: frame != null,
         backdrop: backdrop,
@@ -843,11 +841,17 @@ extension _QueueTabItemWidgets on _QueueTabState {
       return SizedBox(width: size, height: size, child: animated);
     }
 
-    if (isDownloaded) {
-      final embeddedCoverPath = _resolveDownloadedEmbeddedCoverPath(
-        item.filePath,
-      );
-      if (embeddedCoverPath != null) {
+    // The same authoritative FLAC policy is used by Home and the Library.
+    final isFlac = DownloadedEmbeddedCoverResolver.isLocalFlac(item.filePath);
+    if (isDownloaded || isFlac) {
+      final embeddedCoverPath = isFlac
+          ? DownloadedEmbeddedCoverResolver.resolveDisplayCover(
+              item.filePath,
+              fallback: item.coverUrl ?? item.localCoverPath,
+              onChanged: _onEmbeddedCoverChanged,
+            )
+          : _resolveDownloadedEmbeddedCoverPath(item.filePath);
+      if (embeddedCoverPath != null && !_isArtworkHttpUrl(embeddedCoverPath)) {
         return ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: Image.file(
@@ -856,7 +860,7 @@ extension _QueueTabItemWidgets on _QueueTabState {
             height: size,
             fit: BoxFit.cover,
             cacheWidth: cacheSize,
-            gaplessPlayback: true,
+            gaplessPlayback: false,
             frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
                 fadeInFileImage(child, frame, wasSynchronouslyLoaded),
             errorBuilder: (context, error, stackTrace) => item.coverUrl != null
@@ -872,6 +876,13 @@ extension _QueueTabItemWidgets on _QueueTabState {
           ),
         );
       }
+    }
+
+    // Do not substitute a potentially outdated library/remote thumbnail
+    // while a FLAC's embedded artwork is still being extracted.
+    if (isFlac &&
+        !DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(item.filePath)) {
+      return buildPlaceholder(isLocal: !isDownloaded);
     }
 
     if (item.coverUrl != null) {
@@ -895,7 +906,7 @@ extension _QueueTabItemWidgets on _QueueTabState {
           height: size,
           fit: BoxFit.cover,
           cacheWidth: cacheSize,
-          gaplessPlayback: true,
+          gaplessPlayback: false,
           frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
               fadeInFileImage(child, frame, wasSynchronouslyLoaded),
           errorBuilder: (context, error, stackTrace) =>

@@ -2970,7 +2970,18 @@ class MusicPlayerHandler extends BaseAudioHandler
       await _player.seek(position);
       if (generation != _playRequestGeneration || _disposed) return;
       _broadcastPosition(position, force: true);
-      await _persistSession(position: position);
+      // iOS may suspend or terminate a paused app immediately after a seek.
+      // Save that exact position before returning, but never hold the active
+      // transport behind storage I/O (including gapless and AutoMix ticks).
+      // Other platforms retain their existing periodic/paused saves.
+      if (_dependencies.isIOS) {
+        final save = _persistSession(position: position);
+        if (playbackState.value.playing) {
+          unawaited(save);
+        } else {
+          await save;
+        }
+      }
     });
   }
 

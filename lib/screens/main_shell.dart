@@ -347,6 +347,8 @@ class _MainShellState extends ConsumerState<MainShell>
   Future<void> _restorePlayback() async {
     final runtime = ref.read(musicPlayerRuntimeProvider);
     try {
+      await ref.read(settingsProvider.notifier).ensureLoaded();
+      if (!mounted) return;
       await runtime.restoreSession();
       await ref.read(extensionProvider.notifier).ensureInitialized();
       if (!mounted) return;
@@ -386,14 +388,19 @@ class _MainShellState extends ConsumerState<MainShell>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       refreshPreparedSongListArtwork(ref);
+      final runtime = ref.read(musicPlayerRuntimeProvider);
+      if (runtime.dependencies.isIOS && runtime.handler?.mediaItem.value == null) {
+        unawaited(_restorePlayback());
+      }
     }
     if (state == AppLifecycleState.resumed && _initialSafRepairComplete) {
       unawaited(_repairSafAccessIfNeeded());
       unawaited(ref.read(extensionAutoUpdateProvider.notifier).checkOnResume());
     } else if (state == AppLifecycleState.paused) {
-      unawaited(
-        ref.read(musicPlayerRuntimeProvider).handler?.persistCurrentSession(),
-      );
+      final runtime = ref.read(musicPlayerRuntimeProvider);
+      if (!runtime.dependencies.isIOS) {
+        unawaited(runtime.handler?.persistCurrentSession());
+      }
     }
   }
 

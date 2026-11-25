@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:audio_service/audio_service.dart' show AudioServiceRepeatMode;
 import 'package:path_provider/path_provider.dart';
 import 'package:mornye/models/unified_library_item.dart';
@@ -9,6 +7,7 @@ import 'package:mornye/services/playable_media.dart';
 import 'package:mornye/utils/logger.dart';
 import 'package:mornye/utils/file_access.dart' as files;
 import 'package:mornye/utils/playback_artwork.dart';
+import 'package:mornye/utils/ios_container_paths.dart';
 
 final _log = AppLogger('MusicPlayer');
 
@@ -30,17 +29,19 @@ Future<PlaybackResumePreview?> loadPlaybackResumePreview(
     );
     if (saved == null) return null;
     if (!saved.isNetwork && !await files.fileExists(saved.source)) {
-      if (!runtime.dependencies.isAndroid) return null;
-      final replacement = await runtime.dependencies.recoverMovedDownload(
-        saved.source,
-        saved.id,
-        runtime.settings,
-      );
-      if (replacement == null) return null;
-      saved = PlayableMedia.fromJson({
-        ...saved.toJson(),
-        'source': replacement,
-      })!;
+      final rebased = documents == null
+          ? saved.source : rebaseIosSandboxPath(saved.source, documents);
+      if (rebased != saved.source && await files.fileExists(rebased)) {
+        saved = PlayableMedia.fromJson({...saved.toJson(), 'source': rebased})!;
+      } else if (runtime.dependencies.isAndroid) {
+        final replacement = await runtime.dependencies.recoverMovedDownload(
+          saved.source, saved.id, runtime.settings,
+        );
+        if (replacement == null) return null;
+        saved = PlayableMedia.fromJson({...saved.toJson(), 'source': replacement})!;
+      } else if (!runtime.dependencies.isIOS) {
+        return null;
+      }
     }
     // As on restore, a loopback URL or a temporary cover file of earlier
     // versions does not show.
@@ -101,7 +102,7 @@ prepareRestoredPlaybackMedia(
   final checks = <String, Future<bool>>{};
   Future<bool> exists(String path) {
     final pending =
-        checks.remove(path) ?? (fileExists?.call(path) ?? File(path).exists());
+        checks.remove(path) ?? (fileExists?.call(path) ?? files.fileExists(path));
     checks[path] = pending;
     if (checks.length > 256) checks.remove(checks.keys.first);
     return pending;
@@ -116,6 +117,15 @@ prepareRestoredPlaybackMedia(
     );
     if (media == null) return null;
     var sourceRelocated = false;
+    // A re-signed installation can relocate its data container. Only use a
+    // rebased path when that exact relative file exists; keep external paths.
+    if (iosDocumentsPath != null && !media.isContentUri && !media.isNetwork) {
+      final rebased = rebaseIosSandboxPath(media.source, iosDocumentsPath);
+      if (rebased != media.source && await exists(rebased)) {
+        media = PlayableMedia.fromJson({...media.toJson(), 'source': rebased})!;
+        sourceRelocated = true;
+      }
+    }
     if (!media.isContentUri &&
         !media.isNetwork &&
         !await exists(media.source)) {
@@ -130,7 +140,14 @@ prepareRestoredPlaybackMedia(
         );
         return (media, index, false, false);
       }
-      if (replacement == null) return null;
+      if (replacement == null) {
+        // A false existence check on iOS can also mean unavailable protected
+        // data or storage. Restore the song paused, not a truncated queue.
+        if (iosDocumentsPath != null) {
+          return (media, index, false, sourceRelocated);
+        }
+        return null;
+      }
       media = PlayableMedia.fromJson({
         ...media.toJson(),
         'source': replacement,
@@ -240,7 +257,7 @@ Future<bool> restorePlaybackSession(
     final (:items, :keptOriginalIndices, :artworkRelocated, :sourceRelocated) =
         prepared;
     if (items.isEmpty) {
-      await clear();
+      if (!runtime.dependencies.isIOS) await clear();
       return false;
     }
 

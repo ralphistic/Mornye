@@ -584,6 +584,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       unawaited(_runtime.personalization.flush());
       unawaited(_runtime.taste.flush());
       unawaited(_runtime.ranker.flush());
+      if (_dependencies.isIOS) unawaited(persistCurrentSession());
     }
     if (state == AppLifecycleState.resumed ||
         state == AppLifecycleState.inactive ||
@@ -1731,7 +1732,10 @@ class MusicPlayerHandler extends BaseAudioHandler
   Future<void> _persistSession({Duration? position}) {
     if (_restoringSession) return Future<void>.value();
     if (_media.isEmpty || _index < 0 || _index >= _media.length) {
-      return _sessionWriter.clear();
+      // Startup interruption/pause may run before the persisted queue is
+      // loaded. A save without a live item must never erase that queue.
+      // Explicit stop and source deletion own session clearing.
+      return Future<void>.value();
     }
     return _sessionWriter.persist(
       queue: _sessionQueue,
@@ -1746,7 +1750,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     // During restore/source preparation the engine may report a stale zero (or
     // the previous source). The broadcast position already represents the
     // intended start point for the current queue item.
-    if (!_sourceReady) return playbackState.value.position;
+    if (!_sourceReady) return _pendingRestorePosition ?? playbackState.value.position;
     try {
       final position = await _player.getCurrentPosition();
       if (position != null) return position;
@@ -1758,8 +1762,18 @@ class MusicPlayerHandler extends BaseAudioHandler
   /// Called when the app leaves the foreground so a normal restart resumes at
   /// the latest audible point rather than the beginning of the track.
   Future<void> persistCurrentSession() async {
-    if (_media.isEmpty || _index < 0 || _index >= _media.length) return;
+    if (_disposed || _media.isEmpty || _index < 0 || _index >= _media.length ||
+        _switchingGeneration != 0) {
+      return;
+    }
+    final generation = _playRequestGeneration;
+    final revision = _sessionQueueRevision;
+    final index = _index;
     final position = await _currentPositionForPersist();
+    if (_disposed || generation != _playRequestGeneration ||
+        revision != _sessionQueueRevision || index != _index) {
+      return;
+    }
     _lastPeriodicPersistAt = DateTime.now();
     await _persistSession(position: position);
   }
@@ -1807,7 +1821,8 @@ class MusicPlayerHandler extends BaseAudioHandler
         _originalQueueOrder = order.map((i) => _queueItems[i]).toList();
       }
       _repeatMode = repeatMode;
-      _pendingRestorePosition = position > Duration.zero ? position : null;
+      _pendingRestorePosition = position;
+      _userPaused = true;
       _sourceReady = false;
       _lastPeriodicPersistAt = null;
       _sessionWriter.queueRestored(needsRewrite: queueNeedsRewrite);
@@ -1815,12 +1830,8 @@ class MusicPlayerHandler extends BaseAudioHandler
       mediaItem.add(_toMediaItem(_media[_index]));
       _warmPlaybackArtwork();
       _covers.fetchFor(_media[_index]);
-      if (position > Duration.zero) {
-        playbackState.add(
-          playbackState.value.copyWith(updatePosition: position),
-        );
-      }
       _broadcastState(playerState: PlaybackDeckState.paused);
+      _broadcastPosition(position, force: true);
     } finally {
       _restoringSession = false;
     }
@@ -2263,7 +2274,10 @@ class MusicPlayerHandler extends BaseAudioHandler
     mediaItem.add(_toMediaItem(media));
     _lastBroadcastPosition = Duration.zero;
     _lastPositionBroadcastAt = null;
+    _pendingRestorePosition = effectiveStartPosition;
     _broadcastPosition(effectiveStartPosition, force: true);
+    // Preserve the new selection even if source preparation or focus fails.
+    unawaited(_persistSession(position: effectiveStartPosition));
     // Claim the playing state up front (while the app is still in the
     // foreground window) so audio_service can start its foreground service
     // before the async source resolve below.
@@ -2874,8 +2888,11 @@ class MusicPlayerHandler extends BaseAudioHandler
       if (generation != _playRequestGeneration || _disposed) return;
       await _player.pause();
       if (generation != _playRequestGeneration || _disposed) return;
+      final position = await _currentPositionForPersist();
+      if (generation != _playRequestGeneration || _disposed) return;
       _broadcastState(playerState: PlaybackDeckState.paused);
-      await _persistSession(position: await _currentPositionForPersist());
+      _broadcastPosition(position, force: true);
+      await _persistSession(position: position);
     });
   }
 
@@ -2896,6 +2913,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       await _player.seek(position);
       if (generation != _playRequestGeneration || _disposed) return;
       _broadcastPosition(position, force: true);
+      await _persistSession(position: position);
     });
   }
 

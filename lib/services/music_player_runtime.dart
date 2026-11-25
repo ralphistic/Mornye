@@ -714,7 +714,16 @@ class MusicPlayerRuntime {
 
   Future<void> restoreSession() {
     if (_settings.playerMode != 'internal') return Future.value();
-    return _restoreFuture ??= restorePlaybackSession(this).then<void>((_) {});
+    final pending = _restoreFuture;
+    if (pending != null) return pending;
+    late final Future<void> attempt;
+    attempt = restorePlaybackSession(this).then<void>((restored) {
+      // A temporary iOS startup failure must be retryable on foreground resume.
+      if (dependencies.isIOS && !restored && identical(_restoreFuture, attempt)) {
+        _restoreFuture = null;
+      }
+    });
+    return _restoreFuture = attempt;
   }
 
   /// [MusicPlayerHandler.recoverRestoredArtwork] after [restoreSession].

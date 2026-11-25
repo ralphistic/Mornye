@@ -292,7 +292,7 @@ class LocalOrNetworkCoverImage extends StatelessWidget {
       width: width,
       height: height,
       fit: fit,
-      gaplessPlayback: true,
+      gaplessPlayback: false,
       filterQuality: FilterQuality.low,
       frameBuilder: fadeInDuration == null
           ? null

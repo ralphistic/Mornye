@@ -336,6 +336,9 @@ extension _LocalLibraryScan on LocalLibraryNotifier {
         }
         if (forceFullScan) {
           // A forced scan rewrites thumbnails under their existing paths.
+          // Retagged FLAC files can also retain their original timestamps.
+          await DownloadedEmbeddedCoverResolver.clearPersistentCache();
+          DownloadedEmbeddedCoverResolver.announcePreviewsCleared();
           PaintingBinding.instance.imageCache
             ..clear()
             ..clearLiveImages();

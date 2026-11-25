@@ -307,6 +307,7 @@ class _MusicGapless {
           : PlaybackDeckState.playing,
     );
     handler._lastPeriodicPersistAt = DateTime.now();
+    unawaited(handler._refreshIosControlsAfterTransition());
     unawaited(handler._persistSession(position: Duration.zero));
     if (!next.isNetwork) {
       unawaited(handler._recoverEmbeddedArtwork(next, current));

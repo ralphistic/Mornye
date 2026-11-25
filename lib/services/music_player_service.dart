@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart' show compute, visibleForTesting;
+import 'package:flutter/services.dart' show MethodChannel;
 import 'package:flutter/widgets.dart'
     show AppLifecycleState, WidgetsBinding, WidgetsBindingObserver;
 import 'package:mornye/services/playback_notification.dart';
@@ -762,6 +763,13 @@ class MusicPlayerHandler extends BaseAudioHandler
                   state == PlaybackDeckState.disposed)) {
             return;
           }
+          if (state == PlaybackDeckState.completed && _dependencies.isIOS &&
+              !_shouldIgnoreComplete && _hasFollowingTrack) {
+            // The deck completed, not the media session. Keep transport
+            // active while the following source is prepared.
+            _broadcastState(playerState: PlaybackDeckState.playing, loading: true);
+            return;
+          }
           if (state == PlaybackDeckState.completed && _shouldIgnoreComplete) {
             if (_userPaused || _interruptionActive) {
               _broadcastState(playerState: PlaybackDeckState.paused);
@@ -1023,6 +1031,10 @@ class MusicPlayerHandler extends BaseAudioHandler
       _log.w('Could not monitor headphone connections: $error');
     }
   }
+
+  bool get _hasFollowingTrack =>
+      !_sleepAtEndOfSong && _index >= 0 && _media.isNotEmpty &&
+      (_index + 1 < _media.length || _repeatMode != AudioServiceRepeatMode.none);
 
   bool get _shouldIgnoreComplete =>
       _switchingGeneration != 0 ||
@@ -2473,6 +2485,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       );
       _lastPeriodicPersistAt = DateTime.now();
       unawaited(_persistSession(position: effectiveStartPosition));
+      unawaited(_refreshIosControlsAfterTransition());
       // Some files do not emit onDurationChanged reliably (stuck at 0:00);
       // poll the engine for the real duration as a fallback.
       unawaited(_ensureDurationKnown(media, generation));
@@ -2701,14 +2714,53 @@ class MusicPlayerHandler extends BaseAudioHandler
     }
   }
 
+  // Capture the native task's generation before the asynchronous handoff.
+  // An old acknowledgement cannot close a newer completion's task.
+  static const _transitionChannel = MethodChannel('xyz.luan/audioplayers.global');
+
+  Future<int?> _transitionTicket() async {
+    if (!_dependencies.isIOS) return null;
+    try {
+      return await _transitionChannel.invokeMethod<int>(
+        'musicTransitionTicket', <String, Object?>{},
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _finishTransition(Future<int?> ticket) async {
+    final token = await ticket;
+    if (token == null) return;
+    try {
+      await _transitionChannel.invokeMethod<void>('finishMusicTransition', {'token': token});
+    } catch (_) {
+      // Native expiry and the short deadline independently release the task.
+    }
+  }
+
+  Future<void> _refreshIosControlsAfterTransition() async {
+    if (!_dependencies.isIOS || _disposed || _userPaused || _interruptionActive ||
+        !playbackState.value.playing || mediaItem.value == null) {
+      return;
+    }
+    try {
+      await AudioService.refreshNowPlayingInfo();
+    } catch (error) {
+      _log.w('Could not publish iOS controls after transition: $error');
+    }
+  }
+
   Future<void> _handlePlayerComplete() async {
     if (_completing) return;
+    final ticket = _transitionTicket();
     if (_shouldIgnoreComplete) {
       // A natively chained next song must not keep playing unseen.
       unawaited(_gapless.cancel());
       if (_userPaused || _interruptionActive) {
         _broadcastState(playerState: PlaybackDeckState.paused);
       }
+      unawaited(_finishTransition(ticket));
       return;
     }
 
@@ -2719,6 +2771,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       await _onComplete();
     } finally {
       _completing = false;
+      unawaited(_finishTransition(ticket));
     }
   }
 

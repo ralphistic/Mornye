@@ -24,6 +24,11 @@ public class AudioplayersDarwinPlugin: NSObject, FlutterPlugin {
   var globalContext = AudioContext()
   var players = [String: WrappedMediaPlayer]()
 
+  #if os(iOS)
+    private var musicTransitionTask: UIBackgroundTaskIdentifier = .invalid
+    private var musicTransitionGeneration = 0
+  #endif
+
   init(
     registrar: FlutterPluginRegistrar,
     binaryMessenger: FlutterBinaryMessenger,
@@ -84,6 +89,9 @@ public class AudioplayersDarwinPlugin: NSObject, FlutterPlugin {
   }
 
   private func disposePlayers() async {
+    #if os(iOS)
+      await finishAllMusicTransitions()
+    #endif
     for (_, player) in self.players {
       await player.dispose()
     }
@@ -113,6 +121,23 @@ public class AudioplayersDarwinPlugin: NSObject, FlutterPlugin {
     // global handlers (no playerId)
     if method == "init" {
       await disposePlayers()
+    } else if method == "musicTransitionTicket" {
+      #if os(iOS)
+        if musicTransitionTask == .invalid {
+          result(nil)
+        } else {
+          result(musicTransitionGeneration)
+        }
+      #else
+        result(nil)
+      #endif
+      return
+    } else if method == "finishMusicTransition" {
+      #if os(iOS)
+        if let token = args["token"] as? Int {
+          finishMusicTransition(token)
+        }
+      #endif
     } else if method == "setAudioContext" {
       #if os(iOS)
         do {
@@ -419,6 +444,49 @@ public class AudioplayersDarwinPlugin: NSObject, FlutterPlugin {
   func getPlayer(playerId: String) -> WrappedMediaPlayer? {
     return players[playerId]
   }
+
+  // A music-track handoff may briefly have no active audio render.
+  // Protect the existing completion callback before crossing into Flutter.
+  // The task is finite, and neither silent audio nor recurring work is used.
+  @MainActor
+  func beginMusicTransition(_ player: WrappedMediaPlayer) -> Bool {
+    #if os(iOS)
+      guard let id = players.first(where: { $0.value === player })?.key,
+        id == "music-player" || id.hasPrefix("music-player-")
+          || id.hasPrefix("music-gapless-") || id.hasPrefix("music-mix-")
+      else { return false }
+      finishMusicTransition(musicTransitionGeneration)
+      musicTransitionGeneration += 1
+      let token = musicTransitionGeneration
+      musicTransitionTask = UIApplication.shared.beginBackgroundTask(withName: "Mornye track handoff") {
+        [weak self] in
+        Task { @MainActor in self?.finishMusicTransition(token) }
+      }
+      // The Dart acknowledgement normally ends the task immediately.
+      // A missing event or stalled source must not keep the process alive.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+        self?.finishMusicTransition(token)
+      }
+      return true
+    #else
+      return false
+    #endif
+  }
+
+  #if os(iOS)
+    @MainActor
+    private func finishMusicTransition(_ token: Int) {
+      guard token == musicTransitionGeneration, musicTransitionTask != .invalid else { return }
+      let task = musicTransitionTask
+      musicTransitionTask = .invalid
+      UIApplication.shared.endBackgroundTask(task)
+    }
+
+    @MainActor
+    private func finishAllMusicTransitions() {
+      finishMusicTransition(musicTransitionGeneration)
+    }
+  #endif
 
   @MainActor
   func controlAudioSession() {

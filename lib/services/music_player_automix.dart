@@ -491,6 +491,7 @@ class _MusicAutoMix {
       );
       handler._broadcastPosition(audiblePosition, force: true);
       handler._broadcastState(playerState: PlaybackDeckState.playing);
+      unawaited(handler._refreshIosControlsAfterTransition());
       unawaited(handler._persistSession(position: audiblePosition));
       // The plan, fadeDuration and the phase lock's beat are song time; the
       // effect handover below is a short clock-time crossfade between two

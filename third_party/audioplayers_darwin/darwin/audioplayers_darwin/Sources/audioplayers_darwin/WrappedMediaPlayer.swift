@@ -480,7 +480,12 @@ enum ReleaseMode: String {
       next = nil
       if !following.isPlaying { following.resume() }
     }
-    reference.controlAudioSession()
+    // The Mornye handler owns the shared AVAudioSession. A second native
+    // activation here can conflict with interruption handling. Protect the
+    // handoff while the existing handler prepares the next source instead.
+    if !reference.beginMusicTransition(self) {
+      reference.controlAudioSession()
+    }
     eventHandler.onComplete()
 
     await seek(time: toCMTime(millis: 0))

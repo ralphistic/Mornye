@@ -402,6 +402,9 @@ class MusicPlayerHandler extends BaseAudioHandler
         unknownArtist: _runtime.unknownArtist,
         covers: _dependencies.coverStore,
         playbackInstance: _playbackInstance,
+        suppressArtwork: DownloadedEmbeddedCoverResolver.isLocalFlac(
+          media.source,
+        ),
       );
 
   void _init() {
@@ -2453,8 +2456,10 @@ class MusicPlayerHandler extends BaseAudioHandler
     final artwork = await resolveEmbeddedArtworkUri(
       media.source,
       media.artUri,
-      extract: (source) =>
-          DownloadedEmbeddedCoverResolver.resolveOrExtract(source),
+      extract: (source) => DownloadedEmbeddedCoverResolver.resolveOrExtract(
+        source,
+        requireFreshExtraction: true,
+      ),
     );
     if (artwork == null || !_isCurrentPlayRequest(generation, media)) return;
     final current = mediaItem.value;

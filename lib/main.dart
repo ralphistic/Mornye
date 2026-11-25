@@ -55,8 +55,8 @@ import 'package:mornye/utils/android_tv.dart';
 import 'package:mornye/utils/local_library_scan_prefs.dart';
 import 'package:mornye/utils/logger.dart';
 import 'package:mornye/utils/view_display.dart';
-import 'package:mornye/widgets/desktop/desktop_commands.dart'
 import 'package:mornye/widgets/song_list_artwork_prewarm.dart';
+import 'package:mornye/widgets/desktop/desktop_commands.dart'
     show restoreDesktopSidebar;
 import 'package:mornye/widgets/desktop/desktop_inspector.dart'
     show bindDesktopFullScreenLyrics;

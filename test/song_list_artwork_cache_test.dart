@@ -78,11 +78,15 @@ void main() {
       final blue = await png(const ui.Color(0xff0000ff));
       var current = red;
       var extractions = 0;
+      var failExtraction = false;
       DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(previews);
       final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
       messenger.setMockMethodCallHandler(backend, (call) async {
         expect(call.method, 'extractCoverToFile');
         extractions++;
+        if (failExtraction) {
+          return jsonEncode({'error': 'temporary cover read failure'});
+        }
         await File((call.arguments as Map)['output_path'] as String)
             .writeAsBytes(current);
         return jsonEncode({'success': true});
@@ -146,6 +150,16 @@ void main() {
         expect(extractions, 4);
         expect(forced, isNot(rescanned));
         await expectThumbnail(forced, [0, 0, 255, 255]);
+
+        // A confirmed source edit followed by an extraction failure must
+        // not continue showing an older thumbnail as if it were current.
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        await writeFlac(source, [10, 11, 12]);
+        await source.setLastModified(timestamp);
+        failExtraction = true;
+        expect(await SongListArtworkCache.prepare(source.path), isNull);
+        expect(SongListArtworkCache.resolve(source.path), isNull);
+        expect(extractions, 5);
 
         await DownloadedEmbeddedCoverResolver.clearPersistentCache();
         expect(await previews.list().toList(), isEmpty);

@@ -70,9 +70,6 @@ class SongListArtworkCache {
       final result = await future;
       if (!_suspended && epoch == _epoch && _entries.containsKey(path)) {
         _retryAfter.remove(path);
-        if (oldEntry != null && oldEntry.previewPath != _entries[path]!.previewPath) {
-          changes.value = (path, changes.value.$2 + 1);
-        }
         final callbacks = _callbacks.remove(path);
         for (final callback in callbacks ?? const <VoidCallback>{}) {
           try {
@@ -82,6 +79,11 @@ class SongListArtworkCache {
       } else if (!_forced.contains(path)) {
         _callbacks.remove(path);
         _retryAfter[path] = DateTime.now().add(const Duration(seconds: 15));
+      }
+      if (!_suspended && epoch == _epoch && oldEntry != null &&
+          (oldEntry.previewPath != _entries[path]?.previewPath ||
+              !_entries.containsKey(path))) {
+        changes.value = (path, changes.value.$2 + 1);
       }
       return result;
     } finally {
@@ -166,7 +168,26 @@ class SongListArtworkCache {
     try {
       final source = File(path);
       final signature = _signature(await source.stat());
-      if (signature == null || !_current(path, epoch)) return null;
+      if (!_current(path, epoch)) return null;
+      if (signature == null) {
+        // A security-scoped file may be readable by the native backend even
+        // when Dart cannot stat it. Do not persist an unverifiable disk hit.
+        _entries.remove(path);
+        final preview = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+          path,
+          requireFreshExtraction: true,
+        );
+        if (!_current(path, epoch)) return null;
+        if (preview != null ||
+            DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(path)) {
+          _touch(path, _SongRowCover(
+            signature: '',
+            fingerprint: '',
+            previewPath: preview,
+          ));
+        }
+        return preview;
+      }
       final needsContentCheck = _verifyContent && !_verifiedAfterScan.contains(path);
       final memory = _entries[path];
       if (!forced &&
@@ -235,6 +256,9 @@ class SongListArtworkCache {
         }
       }
 
+      // The previous row cover could not be verified against the current
+      // source. Never retain it if fresh extraction fails.
+      _entries.remove(path);
       // A full-resolution extraction is needed only for an actual miss or
       // changed source. Reuse an already verified full preview when possible.
       fingerprint ??= await DownloadedEmbeddedCoverResolver._nativeFlacMetadataFingerprint(path);

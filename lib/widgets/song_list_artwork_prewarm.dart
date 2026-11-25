@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
 import 'dart:io';
 
 import 'package:flutter/widgets.dart';
@@ -11,7 +10,7 @@ import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
 class SongListDecodedArtworkCache {
   static const _maxEntries = 600;
   static const _maxBytes = 36 << 20;
-  static final _pins = LinkedHashMap<Object, _PinnedSongImage>();
+  static final _pins = <Object, _PinnedSongImage>{};
   static int _bytes = 0;
   static int _generation = 0;
   static bool _listenerAttached = false;

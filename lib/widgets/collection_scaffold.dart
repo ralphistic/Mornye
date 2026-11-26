@@ -1,4 +1,5 @@
 import 'package:material_ui/material_ui.dart';
+import 'package:mornye/widgets/ios_status_bar_scroll_target.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
     show GlassBackdropGroup;
 import 'package:mornye/theme/mornye_theme.dart';
@@ -128,10 +129,14 @@ class _CollectionScaffoldState extends State<CollectionScaffold> {
               NavBarSliverSpacer(bottomInset: widget.bottomInset),
             ],
           );
+          final scrollTarget = IosStatusBarScrollTarget(
+            controller: widget.scrollController,
+            child: scrollView,
+          );
           // Share one backdrop capture across the pinned leading back circle
           // and trailing MornyeActionCapsule in collection detail headers.
-          if (!context.isMornye) return scrollView;
-          return GlassBackdropGroup(child: BackdropGroup(child: scrollView));
+          if (!context.isMornye) return scrollTarget;
+          return GlassBackdropGroup(child: BackdropGroup(child: scrollTarget));
         }(),
       ),
     );

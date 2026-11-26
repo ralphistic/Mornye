@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/widgets.dart';
+import 'package:flutter/scheduler.dart' as scheduler;
+import 'package:mornye/routes/now_playing_route.dart';
 import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
 import 'package:mornye/widgets/cached_cover_image.dart';
 
@@ -46,12 +49,17 @@ class AlbumBrowseArtworkCache with WidgetsBindingObserver {
   AlbumBrowseArtworkCache({
     this.maxEntries = 320,
     this.maxBytes = 32 << 20,
+    this.transitioning,
   }) : assert(maxEntries > 0), assert(maxBytes > 0);
 
-  static final shared = AlbumBrowseArtworkCache();
+  static final shared = AlbumBrowseArtworkCache(
+    transitioning: NowPlayingRoute.moving,
+  );
   static const previewEdge = 160;
   final int maxEntries;
   final int maxBytes;
+  final ValueListenable<bool>? transitioning;
+  Future<void>? _warmTail;
   final _images = <String, ui.Image>{};
   final _pending = <String, Future<void>>{};
   int _bytes = 0;
@@ -62,6 +70,41 @@ class AlbumBrowseArtworkCache with WidgetsBindingObserver {
   int get length => _images.length;
   int get bytes => _bytes;
   bool contains(String path) => _images.containsKey(path);
+
+  /// Provider page preparation and view recovery share one queue, instead of
+  /// competing batches of metadata extraction and thumbnail decodes.
+  Future<void> serializeWarmup(Future<void> Function() work) async {
+    final previous = _warmTail;
+    final next = previous == null ? work() : previous.then((_) => work());
+    final tail = next.catchError((Object _, StackTrace _) {});
+    _warmTail = tail;
+    try {
+      await next;
+    } finally {
+      if (identical(_warmTail, tail)) _warmTail = null;
+    }
+  }
+
+  /// Leave the player's existing transition completely unchanged. Finish
+  /// any already-started native read, but start no new background work until
+  /// the route is stationary, including during interactive drag-to-dismiss.
+  Future<void> waitForTransition() async {
+    final moving = transitioning;
+    if (moving == null) return;
+    while (moving.value) {
+      final ready = Completer<void>();
+      void changed() {
+        if (!moving.value && !ready.isCompleted) ready.complete();
+      }
+      moving.addListener(changed);
+      try {
+        changed();
+        await ready.future;
+      } finally {
+        moving.removeListener(changed);
+      }
+    }
+  }
 
   void ensureListeners() {
     if (_listening) return;
@@ -177,15 +220,80 @@ Future<void> prewarmAlbumBrowseArtwork(
     if (!active()) return;
     try {
       final path = await resolve(entry.filePath, entry.cover);
-      if (path != null && active()) await cache.prepare(path);
+      if (path == null || !active()) return;
+      await cache.waitForTransition();
+      if (active()) await cache.prepare(path);
     } catch (_) {
       // Let the normal artwork path handle unavailable previews.
     }
   }
 
-  const batchSize = 3;
-  for (var i = 0; i < candidates.length && active(); i += batchSize) {
-    await Future.wait(candidates.skip(i).take(batchSize).map(warm));
+  await cache.serializeWarmup(() async {
+    const batchSize = 3;
+    for (var i = 0; i < candidates.length && active(); i += batchSize) {
+      await cache.waitForTransition();
+      if (!active()) break;
+      await Future.wait(candidates.skip(i).take(batchSize).map(warm));
+    }
+  });
+}
+
+/// Pace full-size cover requests across frames instead of rebuilding every
+/// visible tile together at scroll end. The route's own moving signal also
+/// stops the queue during open, close and interactive player transitions.
+class AlbumBrowseUpgradeQueue {
+  AlbumBrowseUpgradeQueue({this.transitioning}) {
+    transitioning?.addListener(_schedule);
+  }
+
+  static final shared = AlbumBrowseUpgradeQueue(
+    transitioning: NowPlayingRoute.moving,
+  );
+  final ValueListenable<bool>? transitioning;
+  final _requests = <VoidCallback>{};
+  int? _frameId;
+
+  void request(VoidCallback upgrade) {
+    _requests.add(upgrade);
+    _schedule();
+  }
+
+  void cancel(VoidCallback upgrade) {
+    _requests.remove(upgrade);
+    if (_requests.isEmpty) _cancelFrame();
+  }
+
+  void _cancelFrame() {
+    final id = _frameId;
+    if (id != null) {
+      scheduler.SchedulerBinding.instance.cancelFrameCallbackWithId(id);
+    }
+    _frameId = null;
+  }
+
+  void _schedule() {
+    if (_frameId != null || _requests.isEmpty ||
+        transitioning?.value == true) {
+      return;
+    }
+    _frameId = scheduler.SchedulerBinding.instance.scheduleFrameCallback(
+      _drain,
+    );
+  }
+
+  void _drain(Duration _) {
+    _frameId = null;
+    if (_requests.isEmpty || transitioning?.value == true) return;
+    final request = _requests.first;
+    _requests.remove(request);
+    request();
+    _schedule();
+  }
+
+  void dispose() {
+    transitioning?.removeListener(_schedule);
+    _cancelFrame();
+    _requests.clear();
   }
 }
 
@@ -199,12 +307,14 @@ class AlbumBrowseCoverQuality extends StatefulWidget {
     required this.previewReady,
     required this.preview,
     required this.fullQuality,
+    this.upgrades,
   });
 
   final ValueListenable<bool>? scrolling;
   final bool previewReady;
   final Widget preview;
   final Widget fullQuality;
+  final AlbumBrowseUpgradeQueue? upgrades;
 
   @override
   State<AlbumBrowseCoverQuality> createState() =>
@@ -213,10 +323,22 @@ class AlbumBrowseCoverQuality extends StatefulWidget {
 
 class _AlbumBrowseCoverQualityState extends State<AlbumBrowseCoverQuality> {
   bool _showFull = false;
+  bool _visible = false;
 
-  void _allowFull() {
-    if (!_showFull &&
-        (!widget.previewReady || widget.scrolling?.value != true)) {
+  AlbumBrowseUpgradeQueue get _queue =>
+      widget.upgrades ?? AlbumBrowseUpgradeQueue.shared;
+
+  void _syncRequest() {
+    if (!_showFull && _visible && widget.scrolling?.value != true) {
+      _queue.request(_upgrade);
+    } else {
+      _queue.cancel(_upgrade);
+    }
+  }
+
+  void _upgrade() {
+    if (mounted && !_showFull && _visible &&
+        widget.scrolling?.value != true) {
       setState(() => _showFull = true);
     }
   }
@@ -224,25 +346,37 @@ class _AlbumBrowseCoverQualityState extends State<AlbumBrowseCoverQuality> {
   @override
   void initState() {
     super.initState();
-    _showFull = !widget.previewReady || widget.scrolling?.value != true;
-    widget.scrolling?.addListener(_allowFull);
+    // A genuine miss still uses the normal full-quality load immediately.
+    // A prepared tile always has something to draw while waiting its turn.
+    _showFull = !widget.previewReady;
+    widget.scrolling?.addListener(_syncRequest);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _visible = TickerMode.valuesOf(context).enabled;
+    _syncRequest();
   }
 
   @override
   void didUpdateWidget(covariant AlbumBrowseCoverQuality oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.upgrades != widget.upgrades) {
+      (oldWidget.upgrades ?? AlbumBrowseUpgradeQueue.shared).cancel(_upgrade);
+    }
     if (oldWidget.scrolling != widget.scrolling) {
-      oldWidget.scrolling?.removeListener(_allowFull);
-      widget.scrolling?.addListener(_allowFull);
+      oldWidget.scrolling?.removeListener(_syncRequest);
+      widget.scrolling?.addListener(_syncRequest);
     }
-    if (!widget.previewReady || widget.scrolling?.value != true) {
-      _showFull = true;
-    }
+    if (!widget.previewReady) _showFull = true;
+    _syncRequest();
   }
 
   @override
   void dispose() {
-    widget.scrolling?.removeListener(_allowFull);
+    widget.scrolling?.removeListener(_syncRequest);
+    _queue.cancel(_upgrade);
     super.dispose();
   }
 

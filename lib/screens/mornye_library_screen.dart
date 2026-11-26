@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:material_ui/material_ui.dart';
+import 'package:mornye/widgets/ios_status_bar_scroll_target.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/controllers/clickable_metadata.dart';
 import 'package:mornye/l10n/l10n.dart';
@@ -557,7 +558,7 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen>
         ),
       ],
     ];
-    return AppRefreshIndicator(
+    final content = AppRefreshIndicator(
       onRefresh: () async {
         if (searchingLibrary) return;
         reload();
@@ -887,6 +888,10 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen>
           const NavBarSliverSpacer(),
         ],
       ),
+    );
+    return IosStatusBarScrollTarget(
+      controller: _scroll,
+      child: content,
     );
   }
 

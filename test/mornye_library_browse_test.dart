@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' as foundation;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -356,6 +357,49 @@ void main() {
     expect(offsets.last, 0);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('album grid responds to the native iOS status bar event', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsProvider.overrideWith(_Settings.new),
+          downloadHistoryProvider.overrideWith(_History.new),
+          libraryBrowsePageLoaderProvider.overrideWithValue(
+            (_) async => LibraryBrowsePage(List.generate(36, _album)),
+          ),
+        ],
+        child: MaterialApp(
+          theme: MornyeTheme.build(Brightness.dark),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: MornyeLibraryScreen(
+              page: MornyeLibraryPage.albums,
+              onOpenSection: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final controller = tester
+        .widget<CustomScrollView>(find.byType(CustomScrollView))
+        .controller!;
+    controller.jumpTo(controller.position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(controller.offset, greaterThan(0));
+    tester.simulateStatusBarTap();
+    await tester.pumpAndSettle();
+    expect(controller.offset, controller.position.minScrollExtent);
+    expect(find.text('Album 0'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  }, variant: TargetPlatformVariant.only(foundation.TargetPlatform.iOS));
 
   testWidgets('a song from the Library search plays on in the Songs sort', (
     tester,

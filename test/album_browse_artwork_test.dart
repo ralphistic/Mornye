@@ -214,6 +214,98 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('settled covers upgrade one per frame, never during player motion', (
+    tester,
+  ) async {
+    final scrolling = ValueNotifier(true);
+    final moving = ValueNotifier(false);
+    final queue = AlbumBrowseUpgradeQueue(transitioning: moving);
+    try {
+      await tester.pumpWidget(Directionality(
+        textDirection: TextDirection.ltr,
+        child: Column(
+          children: [
+            for (var i = 0; i < 3; i++)
+              AlbumBrowseCoverQuality(
+                key: ValueKey(i),
+                scrolling: scrolling,
+                previewReady: true,
+                preview: const Text('preview'),
+                fullQuality: const Text('full'),
+                upgrades: queue,
+              ),
+          ],
+        ),
+      ));
+      expect(find.text('preview'), findsNWidgets(3));
+      moving.value = true;
+      scrolling.value = false;
+      await tester.pump(const Duration(milliseconds: 16));
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(find.text('preview'), findsNWidgets(3));
+      moving.value = false;
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(find.text('full'), findsOneWidget);
+      // Interrupt the pending upgrades with a new fling.
+      scrolling.value = true;
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(find.text('full'), findsOneWidget);
+      expect(find.text('preview'), findsNWidgets(2));
+      scrolling.value = false;
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(find.text('full'), findsNWidgets(2));
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(find.text('full'), findsNWidgets(3));
+      expect(tester.takeException(), isNull);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      queue.dispose();
+      moving.dispose();
+      scrolling.dispose();
+    }
+  });
+
+  test('page and recovery warmups serialize and stop starting work in motion', () async {
+    final moving = ValueNotifier(false);
+    final cache = AlbumBrowseArtworkCache(transitioning: moving);
+    final calls = <String>[];
+    final started = Completer<void>();
+    final release = Completer<void>();
+    Future<String?> resolve(String path, String? cover) async {
+      calls.add(path);
+      if (path == 'a0.flac') {
+        started.complete();
+        await release.future;
+      }
+      return null;
+    }
+    final page = prewarmAlbumBrowseArtwork(
+      List.generate(6, (i) => (filePath: 'a$i.flac', cover: null)),
+      cache: cache,
+      isActive: () => true,
+      resolve: resolve,
+    );
+    await started.future;
+    moving.value = true;
+    final recovery = prewarmAlbumBrowseArtwork(
+      List.generate(3, (i) => (filePath: 'b$i.flac', cover: null)),
+      cache: cache,
+      isActive: () => true,
+      resolve: resolve,
+    );
+    release.complete();
+    await Future<void>.delayed(Duration.zero);
+    final duringTransition = List<String>.of(calls);
+    moving.value = false;
+    await Future.wait([page, recovery]);
+    expect(duringTransition, ['a0.flac', 'a1.flac', 'a2.flac']);
+    expect(calls, [
+      for (var i = 0; i < 6; i++) 'a$i.flac',
+      for (var i = 0; i < 3; i++) 'b$i.flac',
+    ]);
+    moving.dispose();
+  });
+
   testWidgets('cache is bounded and a clear discards old artwork', (tester) async {
     final cache = AlbumBrowseArtworkCache(
       maxEntries: 2, maxBytes: 2 * 160 * 160 * 4,

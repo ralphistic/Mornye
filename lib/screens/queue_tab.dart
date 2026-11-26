@@ -5,6 +5,7 @@ import 'package:mornye/widgets/open_audio_button.dart';
 import 'package:flutter/foundation.dart'
     show ValueListenable, listEquals, setEquals;
 import 'package:material_ui/material_ui.dart';
+import 'package:mornye/widgets/ios_status_bar_scroll_target.dart';
 import 'package:mornye/widgets/app_alert_dialog.dart';
 import 'package:mornye/widgets/app_choice_chip.dart';
 import 'package:mornye/widgets/app_content_card.dart';
@@ -816,7 +817,8 @@ class _QueueTabState extends ConsumerState<QueueTab> {
         downloadQueueLookupProvider.select((s) => s.notCompletedItemIds),
       );
       final colors = Theme.of(context).colorScheme;
-      return CustomScrollView(
+      final scrollView = CustomScrollView(
+        controller: Platform.isIOS ? _libraryScrollController : null,
         slivers: [
           AppSliverHeader.page(title: context.l10n.libraryDownloads),
           _buildQueueHeaderSliver(context, colors),
@@ -844,6 +846,10 @@ class _QueueTabState extends ConsumerState<QueueTab> {
             ),
           const NavBarSliverSpacer(),
         ],
+      );
+      return IosStatusBarScrollTarget(
+        controller: _libraryScrollController,
+        child: scrollView,
       );
     }
 
@@ -1347,7 +1353,14 @@ class _QueueTabState extends ConsumerState<QueueTab> {
             .firstOrNull;
         if (anchor != null) _playLibraryItem(anchor, selectionItems);
       },
-      child: page,
+      child: IosStatusBarScrollTarget(
+        controller: _libraryScrollController,
+        hasMoreScrollOffset: () =>
+            _libraryScrollKey.currentState?.innerController.positions.any(
+              (position) => position.pixels > position.minScrollExtent,
+            ) ?? false,
+        child: page,
+      ),
     );
   }
 

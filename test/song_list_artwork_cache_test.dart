@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
+import 'package:mornye/widgets/album_browse_artwork.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -101,6 +102,9 @@ void main() {
         expect(extractions, 1);
         await expectThumbnail(first, [255, 0, 0, 255]);
         expect(SongListArtworkCache.resolve(source.path), first);
+        expect(albumBrowsePreviewPath(source.path, '/old/scan.png'), first);
+        expect(await prepareAlbumBrowsePreviewPath(source.path, '/old/scan.png'), first);
+        expect(extractions, 1, reason: 'album previews share the verified thumbnail');
 
         await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting();
         expect(await SongListArtworkCache.prepare(source.path), first);
@@ -126,6 +130,7 @@ void main() {
         expect(extractions, 2);
         await expectThumbnail(changed, [0, 0, 255, 255]);
         expect(await File(first).exists(), isFalse);
+        expect(albumBrowsePreviewPath(source.path, '/old/scan.png'), changed);
 
         // Full scan checks content, not merely source timestamps.
         current = red;
@@ -159,6 +164,8 @@ void main() {
         failExtraction = true;
         expect(await SongListArtworkCache.prepare(source.path), isNull);
         expect(SongListArtworkCache.resolve(source.path), isNull);
+        expect(albumBrowsePreviewPath(source.path, '/old/scan.png'), isNull,
+            reason: 'a failed extraction must not show an obsolete scan cover');
         expect(extractions, 5);
 
         await DownloadedEmbeddedCoverResolver.clearPersistentCache();

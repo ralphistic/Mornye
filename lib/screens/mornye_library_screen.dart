@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -35,6 +36,7 @@ import 'package:mornye/widgets/desktop/context_menu.dart';
 import 'package:mornye/widgets/desktop/hover_play_button.dart';
 import 'package:mornye/widgets/expressive_button.dart';
 import 'package:mornye/widgets/cached_cover_image.dart';
+import 'package:mornye/widgets/album_browse_artwork.dart';
 import 'package:mornye/widgets/home_pin_action.dart';
 import 'package:mornye/widgets/local_library_artwork_builder.dart';
 import 'package:mornye/widgets/library_search_results.dart';
@@ -63,7 +65,8 @@ class MornyeLibraryScreen extends ConsumerStatefulWidget {
       _MornyeLibraryScreenState();
 }
 
-class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
+class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen>
+    with WidgetsBindingObserver {
   final _scroll = ScrollController();
   final _search = TextEditingController();
   Timer? _debounce;
@@ -74,6 +77,11 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
   List<LibraryBrowseEntry> _rows = const [];
   bool _loading = true;
   bool _hasMore = false;
+  List<LibraryBrowseEntry>? _albumWarmRows;
+  int _albumWarmGeneration = 0;
+  int _albumWarmWindowStart = 0;
+  int _albumWarmWindowEnd = 0;
+  Future<void> _albumWarmTail = Future<void>.value();
 
   bool get _overview => widget.page == MornyeLibraryPage.overview;
   bool get _artists => widget.page == MornyeLibraryPage.artists;
@@ -90,6 +98,12 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
   @override
   void initState() {
     super.initState();
+    if (Platform.isIOS) {
+      WidgetsBinding.instance.addObserver(this);
+      DownloadedEmbeddedCoverResolver.previewsCleared.addListener(
+        _albumPreviewsCleared,
+      );
+    }
     _sort = _overview
         ? 'latest'
         : _artists || _genres
@@ -98,7 +112,8 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
     _scroll.addListener(() {
       // Genres arrive in one read.
       if (_hasMore &&
-          _scroll.position.extentAfter < 500 &&
+          _scroll.position.extentAfter <
+              (Platform.isIOS && !_artists && !_genres ? 1800 : 500) &&
           !_loading &&
           !_genres &&
           !(_overview && _query.isNotEmpty)) {
@@ -111,10 +126,118 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
 
   @override
   void dispose() {
+    _albumWarmGeneration++;
+    if (Platform.isIOS) {
+      WidgetsBinding.instance.removeObserver(this);
+      DownloadedEmbeddedCoverResolver.previewsCleared.removeListener(
+        _albumPreviewsCleared,
+      );
+    }
     _debounce?.cancel();
     _scroll.dispose();
     _search.dispose();
     super.dispose();
+  }
+
+  void _cancelAlbumWarmup() {
+    _albumWarmRows = null;
+    _albumWarmWindowStart = _albumWarmWindowEnd = 0;
+    _albumWarmGeneration++;
+  }
+
+  void _albumPreviewsCleared() {
+    if (mounted) setState(_cancelAlbumWarmup);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (mounted) setState(_cancelAlbumWarmup);
+    } else {
+      _cancelAlbumWarmup();
+    }
+  }
+
+  void _scheduleAlbumWarmup(BuildContext context) {
+    if (!Platform.isIOS || _artists || _genres) return;
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    final visible = TickerMode.of(context) &&
+        (ModalRoute.of(context)?.isCurrent ?? true) &&
+        (lifecycle == null || lifecycle == AppLifecycleState.resumed);
+    if (!visible || _rows.isEmpty) {
+      if (_albumWarmRows != null) _cancelAlbumWarmup();
+      return;
+    }
+    final rows = _rows;
+    final previous = _albumWarmRows;
+    if (identical(previous, rows)) return;
+    _albumWarmRows = rows;
+    final cache = AlbumBrowseArtworkCache.shared;
+    cache.ensureListeners();
+    // The provider already prepares each new page. This pass recovers from
+    // cache clearing, a backgrounded page load or a long-lived cached route.
+    // Do not churn the entire cache on ordinary pagination.
+    final start = previous != null && previous.isNotEmpty &&
+        rows.length > previous.length &&
+        identical(rows.first, previous.first) &&
+        identical(rows[previous.length - 1], previous.last)
+        ? previous.length : 0;
+    _albumWarmWindowStart = start;
+    _albumWarmWindowEnd = rows.length <= cache.maxEntries
+        ? rows.length
+        : (start + 120).clamp(0, rows.length).toInt();
+    _queueAlbumWarmup(rows.getRange(start, _albumWarmWindowEnd));
+  }
+
+  // Extremely large collections cannot fit wholly in a bounded cache.
+  // Rewarm a neighborhood in either scroll direction without rebuilding
+  // the screen or running synchronous file operations in a cell builder.
+  void _warmAroundAlbum(int index) {
+    if (_albumWarmRows == null) return;
+    final cache = AlbumBrowseArtworkCache.shared;
+    if (_rows.length <= cache.maxEntries) return;
+    final nearStart = _albumWarmWindowStart == 0
+        ? 0 : _albumWarmWindowStart + 20;
+    final nearEnd = _albumWarmWindowEnd == _rows.length
+        ? _rows.length : _albumWarmWindowEnd - 20;
+    if (index >= nearStart && index < nearEnd) return;
+    final start = (index - 48).clamp(0, _rows.length - 120).toInt();
+    if (start == _albumWarmWindowStart &&
+        start + 120 == _albumWarmWindowEnd) return;
+    _albumWarmWindowStart = start;
+    _albumWarmWindowEnd = start + 120;
+    // Warm the encountered cell first, then nearby cells in both directions.
+    _queueAlbumWarmup([
+      ..._rows.getRange(index, _albumWarmWindowEnd),
+      ..._rows.getRange(start, index).toList().reversed,
+    ]);
+  }
+
+  void _queueAlbumWarmup(Iterable<LibraryBrowseEntry> rows) {
+    final generation = ++_albumWarmGeneration;
+    final cache = AlbumBrowseArtworkCache.shared;
+    final cacheGeneration = cache.generation;
+    final entries = rows.take(cache.maxEntries).map(
+      (row) => (filePath: row.samplePath, cover: row.cover),
+    ).toList(growable: false);
+    bool active() => mounted &&
+        generation == _albumWarmGeneration &&
+        cacheGeneration == cache.generation;
+    // Do not delay the first layout or run multiple page warmers at once.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!active()) return;
+      _albumWarmTail = _albumWarmTail.then((_) async {
+        if (!active()) return;
+        await prewarmAlbumBrowseArtwork(
+          entries, cache: cache, isActive: active,
+          resolve: (filePath, cover) async {
+            final ready = albumBrowsePreviewPath(filePath, cover);
+            if (ready != null && cache.contains(ready)) return ready;
+            return prepareAlbumBrowsePreviewPath(filePath, cover);
+          },
+        );
+      });
+    });
   }
 
   void _searchChanged(String value) {
@@ -373,6 +496,7 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
     _loading = result.isLoading || (result.value?.isLoadingMore ?? false);
     _hasMore = result.value?.hasMore ?? false;
     if (result.hasValue) _rows = result.requireValue.entries;
+    _scheduleAlbumWarmup(context);
     void reload() => _genres
         ? ref.invalidate(libraryGenresProvider)
         : ref.invalidate(libraryBrowseProvider(_request));
@@ -721,6 +845,7 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
                         ),
                         itemCount: _rows.length,
                         itemBuilder: (context, index) {
+                          _warmAroundAlbum(index);
                           final entry = _rows[index];
                           return DesktopContextMenuRegion(
                             touch: true,
@@ -821,7 +946,9 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(8),
-                    child: _LibraryBrowseArtwork(entry: entry),
+                    child: _LibraryBrowseArtwork(
+                      entry: entry, preparePreview: true,
+                    ),
                   ),
                   if (entry.completeness != null)
                     PositionedDirectional(
@@ -857,8 +984,12 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
 }
 
 class _LibraryBrowseArtwork extends StatefulWidget {
-  const _LibraryBrowseArtwork({required this.entry});
+  const _LibraryBrowseArtwork({
+    required this.entry,
+    this.preparePreview = false,
+  });
   final LibraryBrowseEntry entry;
+  final bool preparePreview;
 
   @override
   State<_LibraryBrowseArtwork> createState() => _LibraryBrowseArtworkState();
@@ -869,6 +1000,9 @@ class _LibraryBrowseArtworkState extends State<_LibraryBrowseArtwork> {
   void initState() {
     super.initState();
     DownloadedEmbeddedCoverResolver.previewsCleared.addListener(_resolveAgain);
+    if (Platform.isIOS && widget.preparePreview) {
+      SongListArtworkCache.changes.addListener(_rowCoverChanged);
+    }
   }
 
   @override
@@ -876,11 +1010,21 @@ class _LibraryBrowseArtworkState extends State<_LibraryBrowseArtwork> {
     DownloadedEmbeddedCoverResolver.previewsCleared.removeListener(
       _resolveAgain,
     );
+    if (Platform.isIOS && widget.preparePreview) {
+      SongListArtworkCache.changes.removeListener(_rowCoverChanged);
+    }
     super.dispose();
   }
 
   void _resolveAgain() {
     if (mounted) setState(() {});
+  }
+
+  void _rowCoverChanged() {
+    if (SongListArtworkCache.changes.value.$1 ==
+        DownloadedEmbeddedCoverResolver.cleanFilePath(widget.entry.samplePath)) {
+      _resolveAgain();
+    }
   }
 
   @override
@@ -896,35 +1040,61 @@ class _LibraryBrowseArtworkState extends State<_LibraryBrowseArtwork> {
         ),
       ),
     );
-    if (entry.source == 'local') {
-      return LocalLibraryArtworkBuilder(
-        coverPath: entry.cover,
-        filePath: entry.samplePath,
-        builder: (context, cover) => cover == null
-            ? fallback(context)
-            : LocalOrNetworkCoverImage(url: cover, placeholder: fallback),
-      );
-    }
-    final stored = entry.cover?.isNotEmpty == true;
-    final isFlac = DownloadedEmbeddedCoverResolver.isLocalFlac(entry.samplePath);
-    final embedded = stored && !isFlac
-        ? null
-        : DownloadedEmbeddedCoverResolver.resolve(
-            entry.samplePath,
-            onChanged: _resolveAgain,
-          );
-    final cover = isFlac
-        ? embedded ??
-              (DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(entry.samplePath)
-                  ? entry.cover
-                  : null)
-        : (stored ? entry.cover! : embedded);
-    return cover == null
+    final prepared = Platform.isIOS && widget.preparePreview;
+    final preview = prepared
+        ? albumBrowsePreviewPath(
+            entry.samplePath, entry.cover, onChanged: _resolveAgain,
+          )
+        : null;
+    Widget previewFallback(BuildContext context) => preview == null
         ? fallback(context)
+        : AlbumBrowsePreparedImage(
+            key: ValueKey(preview),
+            path: preview,
+            cache: AlbumBrowseArtworkCache.shared,
+            placeholder: fallback(context),
+          );
+    Widget display(String? cover, {String? songFile}) => cover == null
+        ? previewFallback(context)
         : LocalOrNetworkCoverImage(
             url: cover,
-            placeholder: fallback,
-            songFile: stored ? entry.samplePath : null,
+            placeholder: previewFallback,
+            fadeInDuration: prepared ? Duration.zero : null,
+            songFile: songFile,
           );
+    Widget fullCover(BuildContext context) {
+      if (entry.source == 'local') {
+        return LocalLibraryArtworkBuilder(
+          coverPath: entry.cover,
+          filePath: entry.samplePath,
+          builder: (context, cover) => display(cover),
+        );
+      }
+      final stored = entry.cover?.isNotEmpty == true;
+      final isFlac = DownloadedEmbeddedCoverResolver.isLocalFlac(entry.samplePath);
+      final embedded = stored && !isFlac
+          ? null
+          : DownloadedEmbeddedCoverResolver.resolve(
+              entry.samplePath,
+              onChanged: _resolveAgain,
+            );
+      final cover = isFlac
+          ? embedded ??
+                (DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(entry.samplePath)
+                    ? entry.cover
+                    : null)
+          : (stored ? entry.cover! : embedded);
+      return display(cover, songFile: stored ? entry.samplePath : null);
+    }
+
+    if (!prepared) return fullCover(context);
+    return AlbumBrowseCoverQuality(
+      key: ValueKey((entry.key, entry.samplePath, entry.cover)),
+      scrolling: Scrollable.maybeOf(context)?.position.isScrollingNotifier,
+      previewReady: preview != null &&
+          AlbumBrowseArtworkCache.shared.contains(preview),
+      preview: previewFallback(context),
+      fullQuality: Builder(builder: fullCover),
+    );
   }
 }

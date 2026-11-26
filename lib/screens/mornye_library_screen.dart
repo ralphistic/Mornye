@@ -161,7 +161,7 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen>
   void _scheduleAlbumWarmup(BuildContext context) {
     if (!Platform.isIOS || _artists || _genres) return;
     final lifecycle = WidgetsBinding.instance.lifecycleState;
-    final visible = TickerMode.of(context) &&
+    final visible = TickerMode.valuesOf(context).enabled &&
         (ModalRoute.of(context)?.isCurrent ?? true) &&
         (lifecycle == null || lifecycle == AppLifecycleState.resumed);
     if (!visible || _rows.isEmpty) {
@@ -203,7 +203,9 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen>
     if (index >= nearStart && index < nearEnd) return;
     final start = (index - 48).clamp(0, _rows.length - 120).toInt();
     if (start == _albumWarmWindowStart &&
-        start + 120 == _albumWarmWindowEnd) return;
+        start + 120 == _albumWarmWindowEnd) {
+      return;
+    }
     _albumWarmWindowStart = start;
     _albumWarmWindowEnd = start + 120;
     // Warm the encountered cell first, then nearby cells in both directions.

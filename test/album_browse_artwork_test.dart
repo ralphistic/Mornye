@@ -100,7 +100,10 @@ void main() {
     tester,
   ) async {
     final cache = AlbumBrowseArtworkCache();
+    final global = PaintingBinding.instance.imageCache;
+    final pending = Completer<ImageInfo>();
     Directory? directory;
+    ui.Image? fullImage;
     try {
       late String preview;
       late String full;
@@ -112,7 +115,21 @@ void main() {
         await File(preview).writeAsBytes(bytes);
         await File(full).writeAsBytes(bytes);
         await cache.prepare(preview);
+        // Decode a real full-size image outside the widget test's fake clock.
+        // Control only delivery of that decoded image to the normal provider.
+        final codec = await ui.instantiateImageCodec(bytes);
+        try {
+          fullImage = (await codec.getNextFrame()).image;
+        } finally {
+          codec.dispose();
+        }
       });
+      final provider = ResizeImage(FileImage(File(full)), width: 224);
+      final key = await provider.obtainKey(ImageConfiguration.empty);
+      global.putIfAbsent(
+        key,
+        () => OneFrameImageStreamCompleter(pending.future),
+      );
       await tester.pumpWidget(Directionality(
         textDirection: TextDirection.ltr,
         child: MediaQuery(
@@ -136,29 +153,23 @@ void main() {
       ));
       expect(find.text('loading'), findsNothing);
       expect(tester.widget<RawImage>(find.byType(RawImage)).image!.width, 160);
-      // The full-quality image is loaded asynchronously by the existing
-      // widget; it must replace the smaller preview, not remain blurry.
-      await tester.runAsync(() async {
-        final stream = ResizeImage(FileImage(File(full)), width: 224)
-            .resolve(ImageConfiguration.empty);
-        final ready = Completer<void>();
-        final listener = ImageStreamListener((info, _) {
-          info.dispose();
-          if (!ready.isCompleted) ready.complete();
-        }, onError: (error, stack) {
-          if (!ready.isCompleted) ready.completeError(error, stack);
-        });
-        stream.addListener(listener);
-        try {
-          await ready.future.timeout(const Duration(seconds: 10));
-        } finally {
-          stream.removeListener(listener);
-        }
-      });
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.widget<RawImage>(find.byType(RawImage)).image!.width, 160);
+
+      // Publish the original through the actual image stream. No real-time
+      // waits or disk I/O futures created in the test's fake-async zone.
+      pending.complete(ImageInfo(image: fullImage!));
+      fullImage = null; // The image stream now owns the handle.
+      await tester.pump();
       await tester.pump();
       expect(tester.widget<RawImage>(find.byType(RawImage)).image!.width, 224);
+      expect(find.text('loading'), findsNothing);
+      expect(tester.takeException(), isNull);
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
+      global.clear();
+      global.clearLiveImages();
+      fullImage?.dispose();
       cache.clear();
       if (directory != null) {
         await tester.runAsync(() => directory!.delete(recursive: true));

@@ -117,7 +117,7 @@ void main() {
         await cache.prepare(preview);
         // Decode a real full-size image outside the widget test's fake clock.
         // Control only delivery of that decoded image to the normal provider.
-        final codec = await ui.instantiateImageCodec(bytes);
+        final codec = await ui.instantiateImageCodec(await File(full).readAsBytes());
         try {
           fullImage = (await codec.getNextFrame()).image;
         } finally {

@@ -513,10 +513,19 @@ class AppStateDatabase {
     required bool shuffle,
     required String repeatMode,
   }) async {
-    // Bytes cross the platform channel as one copy; SQLite reads them as
-    // text in the database encoding, which only UTF-8 matches.
-    final utf8Text = _utf8Databases[db] ??=
-        (await db.rawQuery('PRAGMA encoding')).single.values.single == 'UTF-8';
+    // iOS uses native SQLite, where PRAGMA encoding can return no rows.
+    // The optimized byte binding is optional: when the encoding cannot be
+    // established, bind a Dart String and let SQLite encode its own TEXT.
+    // Never let an encoding optimization prevent a playback checkpoint.
+    var utf8Text = _utf8Databases[db];
+    if (utf8Text == null) {
+      try {
+        utf8Text = await sqliteTextEncoding(db) == 'UTF-8';
+      } catch (_) {
+        utf8Text = false;
+      }
+      _utf8Databases[db] = utf8Text;
+    }
     await db.rawInsert(
       'INSERT OR REPLACE INTO $_playbackSessionTable '
       '(id, media_json, current_index, position_ms, shuffle, repeat_mode, '

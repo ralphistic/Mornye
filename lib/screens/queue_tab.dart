@@ -57,6 +57,7 @@ import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/widgets/app_shape.dart';
 import 'package:mornye/widgets/library_fast_scroller.dart';
 import 'package:mornye/widgets/player_artwork.dart';
+import 'package:mornye/routes/now_playing_route.dart';
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/utils/adaptive_layout.dart';
 import 'package:mornye/utils/audio_quality_badge_policy.dart';
@@ -1082,6 +1083,37 @@ class _QueueTabState extends ConsumerState<QueueTab> {
     final hasMoreLibrary = currentLoadedCount < currentTotalCount;
     final isLibraryPageLoading =
         countsValue.isLoading || activePageValue.isLoading;
+    // Stage the immediately following Songs page while the current one is
+    // visible. Use its exact key/cursor so a near-end scroll reuses the work.
+    // Keep the existing 300-song page size and queue ordering.
+    final livePage = activePageValue.asData?.value;
+    if (prepareSongListArtwork &&
+        !searchingLibrary &&
+        !activePageValue.isLoading &&
+        hasMoreLibrary &&
+        livePage != null &&
+        livePage.items.length == activePageRequest.limit &&
+        TickerMode.valuesOf(context).enabled &&
+        (ModalRoute.isCurrentOf(context) ?? true)) {
+      final nextRequest = _QueueLibraryPageRequest(
+        filterMode: activePageRequest.filterMode,
+        limit: activePageRequest.limit,
+        offset: activePageRequest.offset + activePageRequest.limit,
+        searchQuery: activePageRequest.searchQuery,
+        filterSource: activePageRequest.filterSource,
+        filterQuality: activePageRequest.filterQuality,
+        filterFormat: activePageRequest.filterFormat,
+        filterMetadata: activePageRequest.filterMetadata,
+        sortMode: activePageRequest.sortMode,
+        localLibraryEnabled: activePageRequest.localLibraryEnabled,
+        cursor: livePage.nextCursor,
+      );
+      ref.watch(
+        _preparedSongsPageProvider(
+          (nextRequest, (context.tokens.coverList * 2).toInt()),
+        ).select((_) => 0),
+      );
+    }
     final hasAnyLibraryItems =
         queueCounts.allTrackCount > 0 || queueCounts.albumCount > 0;
     final hasLibraryContent =

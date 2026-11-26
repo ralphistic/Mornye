@@ -102,6 +102,7 @@ void main() {
         expect(extractions, 1);
         await expectThumbnail(first, [255, 0, 0, 255]);
         expect(SongListArtworkCache.resolve(source.path), first);
+        expect(SongListArtworkCache.verifiedThumbnailPath(source.path), first);
         expect(albumBrowsePreviewPath(source.path, '/old/scan.png'), first);
         expect(await prepareAlbumBrowsePreviewPath(source.path, '/old/scan.png'), first);
         expect(extractions, 1, reason: 'album previews share the verified thumbnail');
@@ -124,6 +125,8 @@ void main() {
         await source.setLastModified(timestamp);
         expect(await source.lastModified(), timestamp);
         expect(await source.length(), size);
+        expect(SongListArtworkCache.verifiedThumbnailPath(source.path), isNull,
+            reason: 'a same-mtime edit must not publish the old thumbnail');
         await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting();
         final changed = (await SongListArtworkCache.prepare(source.path))!;
         expect(changed, isNot(first));
@@ -151,6 +154,7 @@ void main() {
           force: true,
         );
         await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting();
+        expect(SongListArtworkCache.verifiedThumbnailPath(source.path), isNull);
         final forced = (await SongListArtworkCache.prepare(source.path))!;
         expect(extractions, 4);
         expect(forced, isNot(rescanned));
@@ -164,6 +168,7 @@ void main() {
         failExtraction = true;
         expect(await SongListArtworkCache.prepare(source.path), isNull);
         expect(SongListArtworkCache.resolve(source.path), isNull);
+        expect(SongListArtworkCache.verifiedThumbnailPath(source.path), isNull);
         expect(albumBrowsePreviewPath(source.path, '/old/scan.png'), isNull,
             reason: 'a failed extraction must not show an obsolete scan cover');
         expect(extractions, 5);

@@ -206,7 +206,10 @@ class PlaybackArtworkCache {
       if (signature == null || readyFilePath(source) != path) return path;
       final bytes = await File(path).readAsBytes();
       if (!active() || _signature(source) != signature) return null;
-      final digest = sha256.convert(bytes).toString();
+      final digest = Platform.isIOS && bytes.length > 256 * 1024
+          ? await compute(_coverDigest, bytes)
+          : _coverDigest(bytes);
+      if (!active() || _signature(source) != signature) return null;
       final key = (digest, width);
       var image = _images.remove(key);
       if (image != null) {
@@ -246,6 +249,9 @@ class PlaybackArtworkCache {
       return null;
     }
   }
+
+  static String _coverDigest(typed.Uint8List bytes) =>
+      sha256.convert(bytes).toString();
 
   static Future<ui.Image> _decode(typed.Uint8List bytes, int width) async {
     final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);

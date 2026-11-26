@@ -7,8 +7,69 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mornye/theme/app_motion.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/player_artwork.dart';
+import 'package:mornye/widgets/song_list_artwork_prewarm.dart';
+
+import 'support/prepared_playback_artwork_fixture.dart';
 
 void main() {
+  testWidgets('a manual selection displays its prepared row before full artwork', (
+    tester,
+  ) async {
+    final cache = PaintingBinding.instance.imageCache;
+    Directory? root;
+    try {
+      final thumbPath = await tester.runAsync(() async {
+        root = await Directory.systemTemp.createTemp('manual-cover');
+        final file = File('${root!.path}/row.png');
+        await file.writeAsBytes(await artworkPng(25));
+        await prewarmSongListArtwork(
+          ['/music/manual.flac'],
+          cacheWidth: 64,
+          resolve: (_) async => file.path,
+          isActive: () => true,
+        );
+        return file.path;
+      });
+      Widget app(String? art, bool pending) => MaterialApp(
+        home: PlayerArtwork(
+          artUri: art,
+          colorScheme: const ColorScheme.dark(),
+          holdPendingArtwork: true,
+          embeddedArtworkPending: pending,
+          pendingPreviewUri: pending ? thumbPath : null,
+        ),
+      );
+      await tester.pumpWidget(app(null, true));
+      final first = tester.widget<RawImage>(find.byType(RawImage)).image!;
+      expect(first.width, 64);
+      expect(find.byIcon(Icons.music_note), findsNothing);
+      final full = await tester.runAsync(() async {
+        final recorder = ui.PictureRecorder();
+        Canvas(recorder).drawColor(Colors.green, BlendMode.src);
+        final picture = recorder.endRecording();
+        final image = await picture.toImage(128, 128);
+        picture.dispose();
+        return image;
+      });
+      const path = '/verified-full-current.png';
+      cache.putIfAbsent(FileImage(File(path)), () =>
+          OneFrameImageStreamCompleter(Future.value(ImageInfo(image: full!))));
+      await tester.pumpWidget(app(path, false));
+      await tester.pumpAndSettle();
+      final finalImage = tester.widget<RawImage>(find.byType(RawImage)).image!;
+      expect(finalImage.width, 128);
+      expect(find.byIcon(Icons.music_note), findsNothing);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      SongListDecodedArtworkCache.clear();
+      cache.clear();
+      cache.clearLiveImages();
+      if (root != null) {
+        await tester.runAsync(() => root!.delete(recursive: true));
+      }
+    }
+  });
+
   testWidgets('player rotation shares a short-side artwork decode size', (
     tester,
   ) async {

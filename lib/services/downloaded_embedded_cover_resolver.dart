@@ -220,6 +220,7 @@ class DownloadedEmbeddedCoverResolver {
     String? filePath, {
     VoidCallback? onChanged,
     bool requireFreshExtraction = false,
+    bool isForeground = true,
   }) async {
     final cleanPath = cleanFilePath(filePath);
     if (cleanPath.isEmpty) return null;
@@ -233,7 +234,7 @@ class DownloadedEmbeddedCoverResolver {
         cleanPath,
         forceRefresh: true,
         onChanged: onChanged,
-        isForeground: true,
+        isForeground: isForeground,
       );
     }
 
@@ -242,7 +243,7 @@ class DownloadedEmbeddedCoverResolver {
         cleanPath,
         forceRefresh: true,
         onChanged: onChanged,
-        isForeground: true,
+        isForeground: isForeground,
       );
     }
 
@@ -253,7 +254,7 @@ class DownloadedEmbeddedCoverResolver {
       return cached.previewPath;
     }
 
-    return _ensureCover(cleanPath, onChanged: onChanged, isForeground: true);
+    return _ensureCover(cleanPath, onChanged: onChanged, isForeground: isForeground);
   }
 
   /// Whether [previewPath] belongs to this resolver. Persistent previews stay
@@ -947,7 +948,14 @@ class DownloadedEmbeddedCoverResolver {
   /// This covers picture and comment blocks even when a tag editor preserves
   /// the file's length and modification timestamp. Audio frames are not read.
   /// Unsupported, malformed, oversized or SAF sources fall back to extraction.
-  static Future<String?> _nativeFlacMetadataFingerprint(String path) async {
+  static Future<String?> _nativeFlacMetadataFingerprint(String path) =>
+      Platform.isIOS
+      ? compute(_fingerprintNativeFlacFile, path)
+      : _fingerprintNativeFlacFile(path);
+
+  // Reading and hashing large embedded pictures can consume multiple
+  // frames. On iOS keep this purely filesystem/CPU work off the UI isolate.
+  static Future<String?> _fingerprintNativeFlacFile(String path) async {
     if (isContentUri(path)) return null;
     const maxMetadataBytes = 64 * 1024 * 1024;
     const maxBlocks = 1024;

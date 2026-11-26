@@ -11,6 +11,7 @@ import 'package:mornye/services/cover_store.dart';
 import 'package:mornye/theme/app_motion.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/cached_cover_image.dart';
+import 'package:mornye/widgets/song_list_artwork_prewarm.dart';
 
 class PlayerArtwork extends StatelessWidget {
   /// Shared decode for the mini player and the full player's blurred cover.
@@ -43,6 +44,10 @@ class PlayerArtwork extends StatelessWidget {
   final bool embeddedArtworkPending;
   final bool holdPendingArtwork;
 
+  /// The selected file's verified row image, for display only while the
+  /// normal full-resolution pipeline catches up. Never a persisted cover.
+  final String? pendingPreviewUri;
+
   const PlayerArtwork({
     super.key,
     required this.artUri,
@@ -54,6 +59,7 @@ class PlayerArtwork extends StatelessWidget {
     this.songFile,
     this.embeddedArtworkPending = false,
     this.holdPendingArtwork = false,
+    this.pendingPreviewUri,
   });
 
   /// Share one full-size decode while artwork moves between player panels.
@@ -90,14 +96,17 @@ class PlayerArtwork extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final uri = embeddedArtworkPending && artUri == null
+        ? pendingPreviewUri
+        : artUri;
     if (holdPendingArtwork) {
       return _PendingPlayerCover(
-        uri: artUri,
+        uri: uri,
         pending: embeddedArtworkPending,
         builder: _buildCover,
       );
     }
-    return _buildCover(context, artUri);
+    return _buildCover(context, uri);
   }
 
   Widget _buildCover(BuildContext context, String? uri) {
@@ -144,10 +153,23 @@ class PlayerArtwork extends StatelessWidget {
 
   Widget? _prepared(String? uri) {
     final path = coverFilePath(uri);
-    if (path == null || !PlaybackArtworkCache.hasImage(path, cacheWidth)) {
-      return null;
+    if (path == null) return null;
+    if (PlaybackArtworkCache.hasImage(path, cacheWidth)) {
+      return _PreparedPlaybackImage(path: path, width: cacheWidth!);
     }
-    return _PreparedPlaybackImage(path: path, width: cacheWidth!);
+    if (uri == pendingPreviewUri) {
+      final width = SongListDecodedArtworkCache.preparedWidth(path);
+      if (width != null) {
+        return SongListPreparedImage(
+          path: path,
+          cacheWidth: width,
+          width: null,
+          height: null,
+          placeholder: _placeholder(),
+        );
+      }
+    }
+    return null;
   }
 
   /// One cover of a crossfade. [onShown] runs once it shows something final:

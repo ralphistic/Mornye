@@ -31,6 +31,33 @@ class SongListArtworkCache {
     return entry != null && entry.previewPath == null;
   }
 
+  /// A display-only fast path for an explicitly selected track. Recheck
+  /// the file identity; never use a pending, forced, or unverified rescan
+  /// entry. The full-resolution artwork is still recovered independently.
+  static String? verifiedThumbnailPath(String? filePath) {
+    final path = DownloadedEmbeddedCoverResolver.cleanFilePath(filePath);
+    if (_suspended || _forced.contains(path) ||
+        DownloadedEmbeddedCoverResolver._pendingRefresh.contains(path) ||
+        (_verifyContent && !_verifiedAfterScan.contains(path))) {
+      return null;
+    }
+    final entry = _entries[path];
+    final preview = entry?.previewPath;
+    if (entry == null || preview == null || entry.fingerprint.isEmpty) {
+      return null;
+    }
+    try {
+      if (_signature(File(path).statSync()) != entry.signature ||
+          !File(preview).existsSync()) {
+        return null;
+      }
+      _touch(path, entry);
+      return preview;
+    } catch (_) {
+      return null;
+    }
+  }
+
   static String? resolve(String? filePath, {VoidCallback? onChanged}) {
     final path = DownloadedEmbeddedCoverResolver.cleanFilePath(filePath);
     final entry = _entries[path];
@@ -176,6 +203,7 @@ class SongListArtworkCache {
         final preview = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
           path,
           requireFreshExtraction: true,
+          isForeground: false,
         );
         if (!_current(path, epoch)) return null;
         if (preview != null ||
@@ -279,6 +307,7 @@ class SongListArtworkCache {
       final preview = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
         path,
         requireFreshExtraction: mustRefresh,
+        isForeground: false,
       );
       if (!_current(path, epoch)) return null;
       if (preview == null &&

@@ -467,12 +467,19 @@ final _preparedSongsPageProvider = FutureProvider.autoDispose
       final (request, cacheWidth) = key;
       final page = await ref.watch(_queueLibraryPageProvider(request).future);
       if (!ref.mounted) return page;
-      await prewarmSongListArtwork(
+      final preparation = prewarmSongListArtwork(
         page.items.map((item) => item.filePath),
         cacheWidth: cacheWidth,
-        isActive: () => ref.mounted,
+        isActive: () {
+          final lifecycle = WidgetsBinding.instance.lifecycleState;
+          return ref.mounted && (lifecycle == null ||
+              lifecycle == AppLifecycleState.resumed);
+        },
         resolve: SongListArtworkCache.prepare,
-      );
-      unawaited(SongListArtworkCache.maintain());
+        transitioning: NowPlayingRoute.moving,
+      ).then((_) async {
+        if (ref.mounted) await SongListArtworkCache.maintain();
+      });
+      await waitForSongPageArtwork(preparation);
       return page;
     });

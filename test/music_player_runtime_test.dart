@@ -1136,6 +1136,75 @@ void main() {
     });
   });
 
+  test('iOS manual song selection publishes the verified thumbnail without waiting for full artwork', () async {
+    final root = await Directory.systemTemp.createTemp('player-selected-cover');
+    final calls = <String>[];
+    final release = Completer<void>();
+    final source = File('${root.path}/selected.flac');
+    DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(
+      Directory('${root.path}/previews'),
+    );
+    mockPreparedArtworkExtraction(calls);
+    PlaybackArtworkCache.displayWidthForTesting = 64;
+    addTearDown(() async {
+      if (!release.isCompleted) release.complete();
+      PlaybackArtworkCache.displayWidthForTesting = null;
+      await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting(
+        preservePersistentFiles: false,
+      );
+      DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(null);
+      clearPreparedArtworkExtraction();
+      await root.delete(recursive: true);
+    });
+    await writeArtworkFlac(source, await artworkPng(42));
+    final thumb = (await SongListArtworkCache.prepare(source.path))!;
+    final full = (await DownloadedEmbeddedCoverResolver.resolveOrExtract(source.path))!;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(preparedArtworkBackend, (call) async {
+      if (call.method != 'extractCoverToFile') {
+        return jsonEncode({'error': 'not available in test'});
+      }
+      await release.future;
+      final args = call.arguments as Map;
+      await File(args['output_path'] as String).writeAsBytes(
+        await readArtworkPicture(args['audio_path'] as String),
+      );
+      return jsonEncode({'success': true});
+    });
+    await File(full).delete();
+    expect(SongListArtworkCache.verifiedThumbnailPath(source.path), thumb);
+
+    final handler = await _runtime(
+      isIOS: true,
+      settings: const AppSettings(pauseOnMute: false, gaplessPlayback: false,
+        autoplay: false, autoMix: false),
+    ).initialize();
+    final selected = PlayableMedia(
+      id: 'manual-selected', source: source.path, title: 'Selected',
+      artist: 'Artist', duration: const Duration(seconds: 60),
+    );
+    try {
+      await handler.setQueueAndPlay([selected]);
+      final initial = handler.mediaItem.value!;
+      expect(initial.id, selected.id);
+      expect(initial.artUri, isNull, reason: 'do not publish a thumbnail to system metadata');
+      expect(initial.extras?['embeddedArtworkPending'], isTrue);
+      expect(initial.extras?['embeddedArtworkPreview'], Uri.file(thumb).toString());
+    } finally {
+      if (!release.isCompleted) release.complete();
+    }
+    for (var i = 0; i < 400; i++) {
+      if (handler.mediaItem.value?.extras?['embeddedArtworkPending'] == false) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    final upgraded = handler.mediaItem.value!;
+    expect(upgraded.id, selected.id);
+    expect(upgraded.artUri, Uri.file(PlaybackArtworkCache.readyPath(source.path)!));
+    expect(upgraded.extras?['embeddedArtworkPreview'], isNull);
+  }, skip: Platform.isWindows);
+
   test('prepared iOS FLAC covers publish with each rapid transport change', () async {
     final root = await Directory.systemTemp.createTemp('player-prepared-covers');
     final calls = <String>[];

@@ -406,13 +406,21 @@ class MusicPlayerHandler extends BaseAudioHandler
   bool _preparesPlaybackArtwork(PlayableMedia media) =>
       _dependencies.isIOS && PlaybackArtworkCache.supports(media.source);
 
-  MediaItem _toMediaItem(PlayableMedia media, {String? resolvedSource}) {
+  MediaItem _toMediaItem(
+    PlayableMedia media, {
+    String? resolvedSource,
+    bool currentTrack = false,
+  }) {
     final prepares = _preparesPlaybackArtwork(media);
     final ready = !prepares
         ? null
         : _iosArtworkBackgrounded
         ? PlaybackArtworkCache.readyFilePath(media.source)
         : PlaybackArtworkCache.readyPath(media.source);
+    final thumbnail = currentTrack && prepares && ready == null &&
+            !_iosArtworkBackgrounded
+        ? SongListArtworkCache.verifiedThumbnailPath(media.source)
+        : null;
     final item = media.toMediaItem(
       resolvedSource: resolvedSource,
       resolvedArtwork: ready == null ? null : Uri.file(ready).toString(),
@@ -427,6 +435,7 @@ class MusicPlayerHandler extends BaseAudioHandler
         ? item.copyWith(extras: {
             ...?item.extras,
             'embeddedArtworkPending': ready == null,
+            if (thumbnail != null) 'embeddedArtworkPreview': Uri.file(thumbnail).toString(),
           })
         : item;
   }
@@ -1960,7 +1969,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       _lastPeriodicPersistAt = null;
       _sessionWriter.queueRestored(needsRewrite: queueNeedsRewrite);
       queue.add(List<MediaItem>.unmodifiable(_queueItems));
-      mediaItem.add(_toMediaItem(_media[_index]));
+      mediaItem.add(_toMediaItem(_media[_index], currentTrack: true));
       _warmPlaybackArtwork();
       _covers.fetchFor(_media[_index]);
       _broadcastState(playerState: PlaybackDeckState.paused);
@@ -2410,7 +2419,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     );
     _runtime.personalization.begin(_learningTrack(media));
     _playbackInstance++;
-    mediaItem.add(_toMediaItem(media));
+    mediaItem.add(_toMediaItem(media, currentTrack: true));
     _lastBroadcastPosition = Duration.zero;
     _lastPositionBroadcastAt = null;
     _pendingRestorePosition = effectiveStartPosition;
@@ -2452,7 +2461,7 @@ class MusicPlayerHandler extends BaseAudioHandler
         if (recovered != null && recovered != media.source) {
           _relocateQueuedSource(media.source, recovered);
           media = _media[_index];
-          mediaItem.add(_toMediaItem(media));
+          mediaItem.add(_toMediaItem(media, currentTrack: true));
         }
       } catch (error) {
         _log.w('Could not resolve a moved download: $error');
@@ -2603,7 +2612,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       // the same metadata twice on every Next. SAF needs this second event so
       // the UI can inspect its temporary local copy.
       if (usingLocalSafCopy) {
-        mediaItem.add(_toMediaItem(_media[_index], resolvedSource: resolved));
+        mediaItem.add(_toMediaItem(_media[_index], resolvedSource: resolved, currentTrack: true));
       }
       _broadcastPosition(effectiveStartPosition, force: true);
       // A source held paused is ready to play, whatever the deck reports.
@@ -2704,6 +2713,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       extras: {
         ...?current.extras,
         if (prepares) 'embeddedArtworkPending': false,
+        if (prepares) 'embeddedArtworkPreview': null,
       },
     );
     mediaItem.add(updated);

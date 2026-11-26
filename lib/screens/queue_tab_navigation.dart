@@ -180,12 +180,15 @@ extension _QueueTabNavigation on _QueueTabState {
         );
 
     final navigator = Navigator.of(context);
-    final embeddedCoverPath = context.isMornye
+    final thumbnail = Platform.isIOS && context.isMornye
+        ? SongListArtworkCache.verifiedThumbnailPath(historyItem.filePath)
+        : null;
+    final embeddedCoverPath = thumbnail ?? (context.isMornye
         ? await trackDetailsEmbeddedCover(historyItem.filePath)
         : await DownloadedEmbeddedCoverResolver.resolveOrExtract(
             historyItem.filePath,
             onChanged: _onEmbeddedCoverChanged,
-          );
+          ));
     if (!mounted) return;
     final artworkSource = embeddedCoverPath ?? historyItem.coverUrl;
     if (embeddedCoverPath == null && !context.isMornye) {
@@ -199,7 +202,10 @@ extension _QueueTabNavigation on _QueueTabState {
     await backdropReady;
     if (!mounted) return;
     final route = slidePageRoute<bool>(
-      page: TrackMetadataScreen(item: historyItem),
+      page: TrackMetadataScreen(
+        item: historyItem,
+        initialEmbeddedThumbnail: thumbnail,
+      ),
     );
     final result = await navigator.push(route);
     if (route is TransitionRoute<bool>) await route.completed;
@@ -225,12 +231,15 @@ extension _QueueTabNavigation on _QueueTabState {
     int? navigationIndex,
   }) async {
     final navigator = Navigator.of(context);
-    final embeddedCoverPath = context.isMornye
+    final thumbnail = Platform.isIOS && context.isMornye
+        ? SongListArtworkCache.verifiedThumbnailPath(item.filePath)
+        : null;
+    final embeddedCoverPath = thumbnail ?? (context.isMornye
         ? await trackDetailsEmbeddedCover(item.filePath)
         : await DownloadedEmbeddedCoverResolver.resolveOrExtract(
             item.filePath,
             onChanged: _onEmbeddedCoverChanged,
-          );
+          ));
     if (!mounted) return;
     final artworkSource = embeddedCoverPath ?? item.coverUrl;
     if (embeddedCoverPath == null && !context.isMornye) {
@@ -249,6 +258,7 @@ extension _QueueTabNavigation on _QueueTabState {
         historyNavigationItems: navigationItems,
         navigationIndex: navigationIndex,
         coverHeroTag: 'cover_lib_dl_${item.id}',
+        initialEmbeddedThumbnail: thumbnail,
       ),
     );
     final result = await navigator.push(route);
@@ -275,12 +285,17 @@ extension _QueueTabNavigation on _QueueTabState {
     int? navigationIndex,
   }) async {
     _searchFocusNode.unfocus();
-    await prepareTrackDetailsCover(
-      context,
-      item.filePath,
-      fallback: item.coverPath,
-    );
-    if (!mounted) return;
+    final thumbnail = Platform.isIOS && context.isMornye
+        ? SongListArtworkCache.verifiedThumbnailPath(item.filePath)
+        : null;
+    if (thumbnail == null) {
+      await prepareTrackDetailsCover(
+        context,
+        item.filePath,
+        fallback: item.coverPath,
+      );
+      if (!mounted) return;
+    }
     await Navigator.push(
       context,
       slidePageRoute<void>(
@@ -289,6 +304,7 @@ extension _QueueTabNavigation on _QueueTabState {
           localNavigationItems: navigationItems,
           navigationIndex: navigationIndex,
           coverHeroTag: 'cover_lib_local_${item.id}',
+          initialEmbeddedThumbnail: thumbnail,
         ),
       ),
     );

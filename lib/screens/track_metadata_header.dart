@@ -99,9 +99,10 @@ extension _TrackMetadataHeader on _TrackMetadataScreenState {
     // this route. That precondition keeps the Hero, foreground, and backdrop
     // on one source from the first frame; this synchronous lookup also covers
     // cached rebuilds and in-screen swipe navigation.
+    final seed = _initialEmbeddedThumbnail;
     final sharedEmbeddedCoverPath = _hasPath(_embeddedCoverPreviewPath)
         ? _embeddedCoverPreviewPath
-        : DownloadedEmbeddedCoverResolver.resolve(_filePath);
+        : seed ?? DownloadedEmbeddedCoverResolver.resolve(_filePath);
     final artworkSource = resolveMetadataArtworkSource(
       embeddedCoverPath: sharedEmbeddedCoverPath,
       localCoverPath: _localCoverPath,
@@ -129,6 +130,18 @@ extension _TrackMetadataHeader on _TrackMetadataScreenState {
     }) {
       final source = artworkSource;
       if (source == null) return placeholder(iconSize);
+      if (seed != null && source == seed) {
+        final width = SongListDecodedArtworkCache.preparedWidth(seed);
+        if (width != null) {
+          return SongListPreparedImage(
+            path: seed,
+            cacheWidth: width,
+            width: null,
+            height: null,
+            placeholder: placeholder(iconSize),
+          );
+        }
+      }
       if (isHttpCoverUrl(source)) {
         return CachedCoverImage(
           imageUrl: source,

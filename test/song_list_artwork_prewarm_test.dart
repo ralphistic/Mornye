@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -114,8 +115,9 @@ void main() {
       }
       // An on-screen widget has its own handle even after a memory-pressure
       // eviction. Its frame must remain valid.
-      SongListDecodedArtworkCache.clear();
+      tester.binding.handleMemoryPressure();
       await tester.pump();
+      expect(SongListDecodedArtworkCache.imageFor(covers[paths.first]!, 112), isNull);
       expect(tester.widget<RawImage>(find.byType(RawImage)).image, isNotNull);
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
@@ -125,6 +127,23 @@ void main() {
         await tester.runAsync(() => directory!.delete(recursive: true));
       }
     }
+  });
+
+  testWidgets('a slow thumbnail cannot block a page beyond its time budget', (
+    tester,
+  ) async {
+    final extraction = Completer<void>();
+    var released = false;
+    final wait = waitForSongPageArtwork(extraction.future).then((_) {
+      released = true;
+    });
+    await tester.pump(const Duration(milliseconds: 499));
+    expect(released, isFalse);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(released, isTrue);
+    expect(extraction.isCompleted, isFalse);
+    extraction.complete();
+    await wait;
   });
 
   test('prepares every FLAC row in a full page, including beyond row 18', () async {
@@ -140,6 +159,37 @@ void main() {
       },
     );
     expect(calls, paths);
+  });
+
+  test('bulk song preparation yields to a player transition', () async {
+    final moving = ValueNotifier(false);
+    final release = Completer<void>();
+    final started = Completer<void>();
+    final calls = <String>[];
+    final warm = prewarmSongListArtwork(
+      List.generate(8, (i) => '/music/$i.flac'),
+      cacheWidth: 112,
+      isActive: () => true,
+      transitioning: moving,
+      resolve: (path) async {
+        calls.add(path);
+        if (path == '/music/0.flac') {
+          started.complete();
+          await release.future;
+        }
+        return null;
+      },
+    );
+    await started.future;
+    moving.value = true;
+    release.complete();
+    await Future<void>.delayed(Duration.zero);
+    final duringMotion = List.of(calls);
+    moving.value = false;
+    await warm;
+    expect(duringMotion, hasLength(4));
+    expect(calls, hasLength(8));
+    moving.dispose();
   });
 
   test('stops warming once the page is no longer active', () async {

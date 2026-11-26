@@ -109,6 +109,8 @@ class MaterialPlayerBackdrop extends StatelessWidget {
                 child: !playsMotionArtwork
                     ? PlayerArtwork(
                         artUri: artUri,
+                        embeddedArtworkPending: mediaItem.extras?['embeddedArtworkPending'] == true,
+                        pendingPreviewUri: mediaItem.extras?['embeddedArtworkPreview'] as String?,
                         colorScheme: colorScheme,
                         cacheWidth: PlayerArtwork.transitionCacheWidth(context),
                         crossfade: trackChange,

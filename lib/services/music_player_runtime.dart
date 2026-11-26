@@ -685,6 +685,9 @@ class MusicPlayerRuntime {
         );
       }
       if (dependencies.isIOS) await handler.restorePlaybackModes();
+      if (_disposed || handler.isDisposed || !identical(_handler, handler)) {
+        throw StateError('Playback handler was disposed while restoring modes');
+      }
       _initializing = false;
       _handlers.add(handler);
       if (dependencies.isAndroid || dependencies.isIOS) {

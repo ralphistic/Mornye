@@ -84,7 +84,9 @@ class PlaybackArtworkCache {
     }
     final entry = _fileEntries[source];
     if (entry == null || entry.signature != _signature(source) ||
-        !File(entry.path).existsSync()) return null;
+        !File(entry.path).existsSync()) {
+      return null;
+    }
     _fileEntries
       ..remove(source)
       ..[source] = entry;

@@ -112,11 +112,12 @@ prepareRestoredPlaybackMedia(
   Future<(PlayableMedia, int, bool, bool)?> resolve(int index) async {
     final entry = rawMedia[index];
     if (entry is! Map) return null;
-    var media = PlayableMedia.fromJson(
+    final parsed = PlayableMedia.fromJson(
       Map<String, dynamic>.from(entry),
       iosDocumentsPath: iosDocumentsPath,
     );
-    if (media == null) return null;
+    if (parsed == null) return null;
+    var media = parsed;
     var sourceRelocated = false;
     // A re-signed installation can relocate its data container. Only use a
     // rebased path when that exact relative file exists; keep external paths.

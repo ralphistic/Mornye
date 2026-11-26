@@ -430,6 +430,18 @@ class _Session implements AudioSession {
 }
 
 class _SessionStore implements AppStateDatabase {
+  ({bool shuffle, String repeatMode})? modes;
+
+  @override
+  Future<({bool shuffle, String repeatMode})?> getPlaybackModes() async => modes;
+
+  @override
+  Future<void> savePlaybackModes({
+    required bool shuffle, required String repeatMode,
+  }) async {
+    modes = (shuffle: shuffle, repeatMode: repeatMode);
+  }
+
   int clears = 0;
   int? persistedPositionMs;
 
@@ -919,7 +931,6 @@ void main() {
     test('pause, seek and app relaunch restore the exact queue and playhead', () async {
       sqfliteFfiInit();
       final db = await AppStateDatabase.openWithFactory(databaseFactoryFfi, '${root.path}/state.db');
-      addTearDown(db.close);
       final store = AppStateDatabase.withDatabase(db);
       final decks = <_Deck>[];
       final first = _runtime(isIOS: true, sessionDatabase: store, decks: decks);
@@ -937,18 +948,27 @@ void main() {
       player.didChangeAppLifecycleState(AppLifecycleState.paused);
       await player.persistCurrentSession();
       await first.dispose();
+      // Close and reopen the database, rather than keeping its connection
+      // alive across a simulated process restart.
+      await db.close();
+      final reopened = await AppStateDatabase.openWithFactory(
+        databaseFactoryFfi, '${root.path}/state.db',
+      );
+      addTearDown(reopened.close);
+      final reopenedStore = AppStateDatabase.withDatabase(reopened);
+      expect((await reopenedStore.getPlaybackSession())?['positionMs'], target.inMilliseconds);
 
       // A suspended audio session can deliver an interruption before the
       // newly initialized handler has loaded any of its persisted queue.
       final session = _Session();
       final freshDecks = <_Deck>[];
-      final fresh = _runtime(isIOS: true, session: session, sessionDatabase: store,
+      final fresh = _runtime(isIOS: true, session: session, sessionDatabase: reopenedStore,
         decks: freshDecks);
       final restored = await fresh.initialize();
       await _settle();
       session.interruptions.add(AudioInterruptionEvent(true, AudioInterruptionType.unknown));
       await _settle();
-      expect(await store.getPlaybackSession(), isNotNull,
+      expect(await reopenedStore.getPlaybackSession(), isNotNull,
         reason: 'startup interruption must not erase the saved session');
       await fresh.restoreSession();
       expect(restored.mediaItem.value?.id, songs[1].id);
@@ -963,6 +983,98 @@ void main() {
       expect(freshDecks.single.position, target);
       expect(restored.playbackState.value.playing, isTrue);
     });
+
+    test('repeat and shuffle survive relaunch even without an active queue', () async {
+      sqfliteFfiInit();
+      final path = '${root.path}/modes.db';
+      final db = await AppStateDatabase.openWithFactory(databaseFactoryFfi, path);
+      final store = AppStateDatabase.withDatabase(db);
+      final first = _runtime(isIOS: true, sessionDatabase: store);
+      final player = await first.initialize();
+      await player.setShuffleMode(AudioServiceShuffleMode.all);
+      await player.setRepeatMode(AudioServiceRepeatMode.one);
+      expect(await store.getPlaybackSession(), isNull);
+      expect(await store.getPlaybackModes(), (shuffle: true, repeatMode: 'one'));
+      await first.dispose();
+      await db.close();
+      final reopened = await AppStateDatabase.openWithFactory(databaseFactoryFfi, path);
+      addTearDown(reopened.close);
+      final freshStore = AppStateDatabase.withDatabase(reopened);
+      final fresh = _runtime(isIOS: true, sessionDatabase: freshStore);
+      await fresh.restoreSession();
+      final restored = fresh.handler!;
+      expect(restored.mediaItem.value, isNull);
+      expect(restored.playbackState.value.shuffleMode, AudioServiceShuffleMode.all);
+      expect(restored.playbackState.value.repeatMode, AudioServiceRepeatMode.one);
+      await restored.setShuffleMode(AudioServiceShuffleMode.none);
+      await restored.setRepeatMode(AudioServiceRepeatMode.none);
+      expect(await freshStore.getPlaybackModes(), (shuffle: false, repeatMode: 'none'));
+      await fresh.dispose();
+      final third = _runtime(isIOS: true, sessionDatabase: freshStore);
+      await third.restoreSession();
+      expect(third.handler!.playbackState.value.shuffleMode, AudioServiceShuffleMode.none);
+      expect(third.handler!.playbackState.value.repeatMode, AudioServiceRepeatMode.none);
+    });
+
+    test('background FLAC completion publishes artwork without decoded images', () async {
+      final calls = <String>[];
+      final tracks = <PlayableMedia>[];
+      DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(
+        Directory('${root.path}/previews'),
+      );
+      mockPreparedArtworkExtraction(calls);
+      PlaybackArtworkCache.displayWidthForTesting = 64;
+      addTearDown(() async {
+        PlaybackArtworkCache.displayWidthForTesting = null;
+        await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting(
+          preservePersistentFiles: false,
+        );
+        DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(null);
+        clearPreparedArtworkExtraction();
+      });
+      for (var i = 0; i < 4; i++) {
+        final source = File('${root.path}/background $i?.flac');
+        await writeArtworkFlac(source, await artworkPng(i));
+        tracks.add(PlayableMedia(
+          id: 'background-$i', source: source.path, title: 'Background $i',
+          artist: 'Artist', duration: const Duration(seconds: 60),
+        ));
+      }
+      final deck = _CastDeck();
+      final player = await _runtime(
+        isIOS: true, createDeck: (_) => deck,
+        settings: const AppSettings(pauseOnMute: false, gaplessPlayback: false,
+          autoplay: false, autoMix: false),
+      ).initialize();
+      await player.setQueueAndPlay(tracks);
+      await until(() => tracks.every((track) =>
+        PlaybackArtworkCache.readyPath(track.source) != null));
+      final expected = {
+        for (final track in tracks)
+          track.id: Uri.file(PlaybackArtworkCache.readyPath(track.source)!),
+      };
+      player.didChangeAppLifecycleState(AppLifecycleState.paused);
+      PlaybackArtworkCache.clearDecoded();
+      // No renderer-owned image exists, but the system has the verified file.
+      expect(PlaybackArtworkCache.readyPath(tracks[1].source), isNull);
+      expect(PlaybackArtworkCache.readyFilePath(tracks[1].source), isNotNull);
+      deck.complete();
+      await until(() => player.mediaItem.value?.id == tracks[1].id &&
+        player.playbackState.value.processingState == AudioProcessingState.ready);
+      expect(player.mediaItem.value!.artUri, expected[tracks[1].id]);
+      expect(PlaybackArtworkCache.readyPath(tracks[1].source), isNull);
+      // Force a cold preparation. The next song's file must still be
+      // published without waiting for a graphics context.
+      PlaybackArtworkCache.invalidate(tracks[2].source);
+      deck.complete();
+      await until(() => player.mediaItem.value?.id == tracks[2].id &&
+        player.mediaItem.value?.artUri == expected[tracks[2].id] &&
+        player.playbackState.value.processingState == AudioProcessingState.ready);
+      expect(PlaybackArtworkCache.readyPath(tracks[2].source), isNull);
+      expect(PlaybackArtworkCache.readyFilePath(tracks[2].source), isNotNull);
+      expect(player.playbackState.value.playing, isTrue);
+      expect(calls, hasLength(tracks.length));
+    }, skip: Platform.isWindows);
 
     test('completion keeps controls active through next-source preparation', () async {
       final methods = <MethodCall>[];

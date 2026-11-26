@@ -97,6 +97,7 @@ prepareRestoredPlaybackMedia(
   required Future<String?> Function(PlayableMedia) loadLibraryCoverPath,
   Future<bool> Function(String)? fileExists,
   Future<String?> Function(PlayableMedia)? recoverSource,
+  bool deferIosArtworkRecovery = false,
 }) async {
   const batchSize = 8;
   final checks = <String, Future<bool>>{};
@@ -121,10 +122,28 @@ prepareRestoredPlaybackMedia(
     // rebased path when that exact relative file exists; keep external paths.
     if (iosDocumentsPath != null && !media.isContentUri && !media.isNetwork) {
       final rebased = rebaseIosSandboxPath(media.source, iosDocumentsPath);
-      if (rebased != media.source && await exists(rebased)) {
-        media = PlayableMedia.fromJson({...media.toJson(), 'source': rebased})!;
-        sourceRelocated = true;
+      if (rebased != media.source) {
+        try {
+          if (await exists(rebased)) {
+            media = PlayableMedia.fromJson({...media.toJson(), 'source': rebased})!;
+            sourceRelocated = true;
+          }
+        } catch (error) {
+          _log.w('Could not check relocated iOS playback source: $error');
+        }
       }
+    }
+    if (deferIosArtworkRecovery) {
+      // Publish the saved queue even while file providers or the cover
+      // database are unavailable. Recover artwork after showing the player.
+      final artwork = durableCoverReference(media.artUri);
+      return (
+        artwork == media.artUri ? media :
+            PlayableMedia.fromJson({...media.toJson(), 'artUri': artwork})!,
+        index,
+        artwork != entry['artUri'],
+        sourceRelocated,
+      );
     }
     if (!media.isContentUri &&
         !media.isNetwork &&
@@ -213,7 +232,10 @@ Future<bool> restorePlaybackSession(
     final session = fromResume
         ? await database.getPlaybackResumeSession()
         : await database.getPlaybackSession();
-    if (session == null) return false;
+    if (session == null) {
+      _log.i('No saved playback session found');
+      return false;
+    }
 
     Future<void> clear() => fromResume
         ? database.clearPlaybackResume()
@@ -225,12 +247,18 @@ Future<bool> restorePlaybackSession(
       return false;
     }
 
-    final iosDocumentsPath = runtime.dependencies.isIOS
-        ? (await getApplicationDocumentsDirectory()).path
-        : null;
+    String? iosDocumentsPath;
+    if (runtime.dependencies.isIOS) {
+      try {
+        iosDocumentsPath = (await getApplicationDocumentsDirectory()).path;
+      } catch (error) {
+        _log.w('Could not resolve iOS Documents during playback restore: $error');
+      }
+    }
     final prepared = await prepareRestoredPlaybackMedia(
       rawMedia,
       iosDocumentsPath: iosDocumentsPath,
+      deferIosArtworkRecovery: runtime.dependencies.isIOS,
       recoverSource: runtime.dependencies.isAndroid
           ? (media) => runtime.dependencies.recoverMovedDownload(
               media.source,

@@ -302,6 +302,8 @@ class _MainShellState extends ConsumerState<MainShell>
       showRepoTab: false,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Start restoring playback before unrelated permission repair or dialogs.
+      if (Platform.isIOS) unawaited(_restorePlayback());
       // Null when the startup check gave no answer: it is then asked again.
       final safLost = await ref.read(initialSafValidationProvider);
       if (!mounted) return;
@@ -312,7 +314,7 @@ class _MainShellState extends ConsumerState<MainShell>
       _initialSafRepairComplete = true;
       if (!mounted) return;
       unawaited(_pointAtMovedSearch());
-      unawaited(_restorePlayback());
+      if (!Platform.isIOS) unawaited(_restorePlayback());
       // Off the startup path: waits for extensions, then fills the Store
       // badge and installs updates without the Store tab being opened.
       unawaited(
@@ -350,6 +352,9 @@ class _MainShellState extends ConsumerState<MainShell>
       await ref.read(settingsProvider.notifier).ensureLoaded();
       if (!mounted) return;
       await runtime.restoreSession();
+      if (runtime.dependencies.isIOS) {
+        unawaited(runtime.handler?.recoverRestoredArtwork());
+      }
       await ref.read(extensionProvider.notifier).ensureInitialized();
       if (!mounted) return;
       await runtime.recoverRestoredArtwork();

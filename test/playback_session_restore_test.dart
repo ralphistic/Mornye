@@ -17,6 +17,33 @@ Map<String, dynamic> _media(int index, {String? artwork, String? source}) =>
     ).toJson();
 
 void main() {
+  test('iOS startup publishes saved queue without waiting on artwork or file providers', () async {
+    final source = '/private/var/mobile/Library/External/Music/Continue?.flac';
+    final result = await prepareRestoredPlaybackMedia(
+      [_media(0, source: source), _media(1)],
+      deferIosArtworkRecovery: true,
+      fileExists: (_) async => throw StateError('File provider unavailable'),
+      loadLibraryCoverPath: (_) async => throw StateError('Cover database unavailable'),
+    );
+    expect(result.items.map((item) => item.source), [source, '/music/1.flac']);
+    expect(result.keptOriginalIndices, [0, 1]);
+  });
+
+  test('iOS startup keeps a queue if the relocated source cannot yet be checked', () async {
+    const oldRoot = '/var/mobile/Containers/Data/Application/AAAA';
+    const currentRoot = '/var/mobile/Containers/Data/Application/BBBB';
+    const suffix = '/Documents/Mornye/Song.flac';
+    final result = await prepareRestoredPlaybackMedia(
+      [_media(0, source: '$oldRoot$suffix'), _media(1)],
+      iosDocumentsPath: '$currentRoot/Documents',
+      deferIosArtworkRecovery: true,
+      fileExists: (_) async => throw StateError('Protected file unavailable'),
+      loadLibraryCoverPath: (_) async => throw StateError('Cover database unavailable'),
+    );
+    expect(result.items.map((item) => item.source), ['$oldRoot$suffix', '/music/1.flac']);
+    expect(result.keptOriginalIndices, [0, 1]);
+  });
+
   test('iOS restores exact relocated audio and keeps temporarily unavailable files', () async {
     const oldRoot = '/var/mobile/Containers/Data/Application/AAAA';
     const currentRoot = '/var/mobile/Containers/Data/Application/BBBB';

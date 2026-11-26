@@ -294,6 +294,8 @@ void main() {
         ),
       );
       musicPlayerRuntime.prepareCovers();
+      // Restore directly from bootstrap settings, independently of the shell.
+      if (Platform.isIOS) unawaited(musicPlayerRuntime.restoreSession());
       // Waits until startup settles, then analyzes how songs sound for
       // Autoplay. Media browsers that start without the app shell skip it.
       musicPlayerRuntime.startSongAnalysis();

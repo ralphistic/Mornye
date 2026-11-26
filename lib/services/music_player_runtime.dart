@@ -684,6 +684,7 @@ class MusicPlayerRuntime {
           'Playback initialization returned an inactive handler',
         );
       }
+      if (dependencies.isIOS) await handler.restorePlaybackModes();
       _initializing = false;
       _handlers.add(handler);
       if (dependencies.isAndroid || dependencies.isIOS) {
@@ -717,10 +718,15 @@ class MusicPlayerRuntime {
     final pending = _restoreFuture;
     if (pending != null) return pending;
     late final Future<void> attempt;
-    attempt = restorePlaybackSession(this).then<void>((restored) {
-      // A temporary iOS startup failure must be retryable on foreground resume.
-      if (dependencies.isIOS && !restored && identical(_restoreFuture, attempt)) {
-        _restoreFuture = null;
+    attempt = restorePlaybackSession(this).then<void>((restored) async {
+      // An empty queue must not also reset independent repeat/shuffle choices.
+      if (dependencies.isIOS && !restored && !_disposed) {
+        try {
+          await initialize();
+        } catch (error) {
+          _log.w('Could not initialize saved playback modes: $error');
+        }
+        if (identical(_restoreFuture, attempt)) _restoreFuture = null;
       }
     });
     return _restoreFuture = attempt;

@@ -9,6 +9,11 @@ class PlaybackArtworkCache {
   static const _maxSources = 180;
   static const _maxImages = 48;
   static final _entries = <String, _PlaybackCover>{};
+  // System artwork must not wait for the Flutter renderer.
+  static final _fileEntries = <String, ({String signature, String path})>{};
+  static final _filePending = <String, Future<String?>>{};
+  static final _fileTokens = <String, Object>{};
+  static int _fileEpoch = 0;
   static final _images = <(String, int), ui.Image>{};
   static final _pending = <(String, int), Future<String?>>{};
   static final _tokens = <String, Object>{};
@@ -71,6 +76,77 @@ class PlaybackArtworkCache {
   static String? readyPath(String source, {int? width}) =>
       _ready(source, width ?? displayWidth)?.previewPath;
 
+  /// A verified preview file for native Now Playing, independent of dart:ui.
+  static String? readyFilePath(String source) {
+    if (_suspended ||
+        DownloadedEmbeddedCoverResolver._pendingRefresh.contains(source)) {
+      return null;
+    }
+    final entry = _fileEntries[source];
+    if (entry == null || entry.signature != _signature(source) ||
+        !File(entry.path).existsSync()) return null;
+    _fileEntries
+      ..remove(source)
+      ..[source] = entry;
+    return entry.path;
+  }
+
+  static Future<String?> prepareFile(String source) {
+    if (!supports(source) || _suspended) return Future.value(null);
+    final ready = readyFilePath(source);
+    if (ready != null) return Future.value(ready);
+    final existing = _filePending[source];
+    if (existing != null) return existing;
+    final epoch = _fileEpoch;
+    final token = Object();
+    _fileTokens[source] = token;
+    final future = _prepareFile(source, epoch, token);
+    _filePending[source] = future;
+    unawaited(future.then((_) {
+      if (identical(_filePending[source], future)) _filePending.remove(source);
+      if (identical(_fileTokens[source], token)) _fileTokens.remove(source);
+    }));
+    return future;
+  }
+
+  static Future<String?> _prepareFile(
+    String source, int epoch, Object token,
+  ) async {
+    bool active() => !_suspended && epoch == _fileEpoch &&
+        identical(_fileTokens[source], token);
+    try {
+      final signature = _signature(source);
+      if (signature == null) {
+        final path = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
+          source, requireFreshExtraction: true,
+        );
+        return active() ? path : null;
+      }
+      final forced = DownloadedEmbeddedCoverResolver._pendingRefresh.remove(source);
+      final path = await DownloadedEmbeddedCoverResolver._ensureCover(
+        source, forceRefresh: forced, verifyExistingFlac: true, isForeground: true,
+      );
+      if (!active() || path == null || _signature(source) != signature) return null;
+      final fingerprint =
+          await DownloadedEmbeddedCoverResolver._nativeFlacMetadataFingerprint(source);
+      if (!active() || _signature(source) != signature) return null;
+      if (fingerprint == null) return path;
+      final expected = DownloadedEmbeddedCoverResolver._persistentFileName(
+        source, null, content: 'f1_$fingerprint',
+      );
+      if (p.basename(path) != expected || !File(path).existsSync()) return null;
+      _fileEntries
+        ..remove(source)
+        ..[source] = (signature: signature, path: path);
+      while (_fileEntries.length > _maxSources) {
+        _fileEntries.remove(_fileEntries.keys.first);
+      }
+      return path;
+    } catch (_) {
+      return null;
+    }
+  }
+
   static ui.Image? imageForPath(String path, int? width) {
     if (width == null || _suspended) return null;
     for (final entry in _entries.values) {
@@ -123,32 +199,9 @@ class PlaybackArtworkCache {
         !_suspended && epoch == _epoch && identical(_tokens[source], token);
     try {
       final signature = _signature(source);
-      if (signature == null) {
-        final path = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
-          source,
-          requireFreshExtraction: true,
-        );
-        return active() ? path : null;
-      }
-      final forced = DownloadedEmbeddedCoverResolver._pendingRefresh.remove(source);
-      // Bypass the timestamp-only in-memory hit, but let the resolver reuse a
-      // persistent preview whose exact FLAC metadata fingerprint still matches.
-      final path = await DownloadedEmbeddedCoverResolver._ensureCover(
-        source,
-        forceRefresh: forced,
-        verifyExistingFlac: true,
-        isForeground: true,
-      );
-      if (!active() || path == null || _signature(source) != signature) {
-        return null;
-      }
-      final fingerprint = await DownloadedEmbeddedCoverResolver._nativeFlacMetadataFingerprint(source);
-      if (!active() || _signature(source) != signature) return null;
-      if (fingerprint == null) return path; // readable nonstandard FLAC, no cache trust
-      final expected = DownloadedEmbeddedCoverResolver._persistentFileName(
-        source, null, content: 'f1_$fingerprint',
-      );
-      if (p.basename(path) != expected) return null;
+      final path = await prepareFile(source);
+      if (!active() || path == null || _signature(source) != signature) return null;
+      if (signature == null || readyFilePath(source) != path) return path;
       final bytes = await File(path).readAsBytes();
       if (!active() || _signature(source) != signature) return null;
       final digest = sha256.convert(bytes).toString();
@@ -221,9 +274,21 @@ class PlaybackArtworkCache {
     _entries.remove(source);
     _tokens.remove(source);
     _pending.removeWhere((key, _) => key.$1 == source);
+    _fileEntries.remove(source);
+    _filePending.remove(source);
+    _fileTokens.remove(source);
   }
 
   static void clear() {
+    clearDecoded();
+    _fileEpoch++;
+    _fileEntries.clear();
+    _filePending.clear();
+    _fileTokens.clear();
+  }
+
+  /// Free GPU memory without discarding verified native artwork files.
+  static void clearDecoded() {
     _epoch++;
     _entries.clear();
     _tokens.clear();

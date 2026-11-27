@@ -180,21 +180,22 @@ extension _QueueTabNavigation on _QueueTabState {
         );
 
     final navigator = Navigator.of(context);
-    final thumbnail = Platform.isIOS && context.isMornye
+    final isMornye = context.isMornye;
+    final thumbnail = Platform.isIOS && isMornye
         ? SongListArtworkCache.verifiedThumbnailPath(historyItem.filePath)
         : null;
-    final embeddedCoverPath = thumbnail ?? (context.isMornye
+    final embeddedCoverPath = thumbnail ?? (isMornye
         ? await trackDetailsEmbeddedCover(historyItem.filePath)
         : await DownloadedEmbeddedCoverResolver.resolveOrExtract(
             historyItem.filePath,
             onChanged: _onEmbeddedCoverChanged,
           ));
-    if (!context.mounted) return;
+    if (!mounted) return;
     final artworkSource = embeddedCoverPath ?? historyItem.coverUrl;
-    if (embeddedCoverPath == null && !context.isMornye) {
+    if (embeddedCoverPath == null && !isMornye) {
       precacheCoverImage(context, historyItem.coverUrl);
     }
-    final backdropReady = context.isMornye
+    final backdropReady = isMornye
         ? Future<void>.value()
         : precacheMetadataBackdrop(context, artworkSource);
     _searchFocusNode.unfocus();
@@ -231,21 +232,22 @@ extension _QueueTabNavigation on _QueueTabState {
     int? navigationIndex,
   }) async {
     final navigator = Navigator.of(context);
-    final thumbnail = Platform.isIOS && context.isMornye
+    final isMornye = context.isMornye;
+    final thumbnail = Platform.isIOS && isMornye
         ? SongListArtworkCache.verifiedThumbnailPath(item.filePath)
         : null;
-    final embeddedCoverPath = thumbnail ?? (context.isMornye
+    final embeddedCoverPath = thumbnail ?? (isMornye
         ? await trackDetailsEmbeddedCover(item.filePath)
         : await DownloadedEmbeddedCoverResolver.resolveOrExtract(
             item.filePath,
             onChanged: _onEmbeddedCoverChanged,
           ));
-    if (!context.mounted) return;
+    if (!mounted) return;
     final artworkSource = embeddedCoverPath ?? item.coverUrl;
-    if (embeddedCoverPath == null && !context.isMornye) {
+    if (embeddedCoverPath == null && !isMornye) {
       precacheCoverImage(context, item.coverUrl);
     }
-    final backdropReady = context.isMornye
+    final backdropReady = isMornye
         ? Future<void>.value()
         : precacheMetadataBackdrop(context, artworkSource);
     _searchFocusNode.unfocus();

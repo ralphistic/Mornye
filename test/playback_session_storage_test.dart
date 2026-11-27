@@ -233,6 +233,81 @@ void main() {
     expect(row['media_json'], _legacyJson(songs));
   });
 
+  test('an empty encoding PRAGMA cannot prevent saving and reopening playback', () async {
+    final filePath = '${root.path}/native-like-session.db';
+    final native = await AppStateDatabase.openWithFactory(
+      databaseFactoryFfi, filePath,
+    );
+    final watched = _Watched(native, missingEncodingPragma: true);
+    final nativeStore = AppStateDatabase.withDatabase(watched);
+    final songs = [for (var i = 0; i < 2500; i++) _song(i)];
+    final expected = _legacyJson(songs);
+    expect(utf8.encode(expected).length, greaterThan(longTextPieceBytes));
+    // Reproduce the observed native failure condition, not just a working
+    // FFI database's usual nonempty PRAGMA result.
+    expect(await watched.rawQuery('PRAGMA encoding'), isEmpty);
+    watched.encodingPragmas = 0;
+    final errors = <Object>[];
+    final writer = PlaybackSessionWriter(
+      database: nativeStore, onError: errors.add,
+    );
+    await writer.persist(
+      queue: () => (media: List.of(songs), originalIndices: null),
+      index: 53,
+      position: const Duration(milliseconds: 34781),
+      shuffle: true,
+      repeatMode: 'one',
+    );
+    expect(errors, isEmpty);
+    expect(watched.encodingPragmas, 0);
+    final row = await _storedRow(native);
+    expect(row['media_json'], expected);
+    expect(row['type'], 'text');
+    expect(row['current_index'], 53);
+    expect(row['position_ms'], 34781);
+    await native.close();
+
+    final reopened = await AppStateDatabase.openWithFactory(
+      databaseFactoryFfi, filePath,
+    );
+    addTearDown(reopened.close);
+    final reopenedWatched = _Watched(
+      reopened, missingEncodingPragma: true,
+    );
+    final saved = await AppStateDatabase.withDatabase(reopenedWatched)
+        .getPlaybackSession();
+    expect(saved?['media'], jsonDecode(expected));
+    expect(saved?['index'], 53);
+    expect(saved?['positionMs'], 34781);
+    expect(saved?['shuffle'], isTrue);
+    expect(saved?['repeat'], 'one');
+    expect(reopenedWatched.encodingPragmas, 0);
+    expect(reopenedWatched.pieces, greaterThan(1));
+  });
+
+  test('unavailable encoding probe falls back to native TEXT binding', () async {
+    final watched = _Watched(
+      db, missingEncodingPragma: true, missingEncodingProbe: true,
+    );
+    final songs = [_song(0), _song(1)];
+    final expected = _legacyJson(songs);
+    await AppStateDatabase.writePlaybackSession(
+      watched,
+      mediaJson: utf8.encode(expected),
+      index: 1,
+      positionMs: 27001,
+      shuffle: false,
+      repeatMode: 'all',
+    );
+    final row = await _storedRow(db);
+    expect(row['type'], 'text');
+    expect(row['media_json'], expected);
+    expect(row['position_ms'], 27001);
+    expect(watched.encodingPragmas, 0);
+    expect(watched.lastInsertArguments?.first, isA<String>());
+    expect((await store.getPlaybackSession())?['positionMs'], 27001);
+  });
+
   test('a session over 2 MB reads back whole in pieces', () async {
     final songs = [
       for (var i = 0; i < 10000; i++)
@@ -297,7 +372,7 @@ void main() {
       );
       await other.execute("PRAGMA encoding = '$encoding'");
       await other.execute('CREATE TABLE t (id INTEGER PRIMARY KEY, body TEXT)');
-      final watched = _Watched(other);
+      final watched = _Watched(other, missingEncodingPragma: true);
       // Byte sizes around one and two pieces, with two-, three- and
       // four-byte characters split by a piece boundary.
       final bodies = [
@@ -337,6 +412,7 @@ void main() {
         expect(read?.$2, body, reason: '$encoding ${body.length}');
       }
       expect(watched.largest, lessThanOrEqualTo(longTextPieceBytes));
+      expect(watched.encodingPragmas, 0);
       await other.close();
     }
   });
@@ -366,16 +442,37 @@ String _sameText(String text) => text;
 /// Records the largest value any read returns and how many long-text
 /// pieces it read, through the database and its transactions.
 class _Watched implements Database {
-  _Watched(this._db);
+  _Watched(
+    this._db, {
+    this.missingEncodingPragma = false,
+    this.missingEncodingProbe = false,
+  });
 
   final Database _db;
+  final bool missingEncodingPragma;
+  final bool missingEncodingProbe;
   int largest = 0;
   int pieces = 0;
+  int encodingPragmas = 0;
+  List<Object?>? lastInsertArguments;
+
+  @override
+  Future<int> rawInsert(String sql, [List<Object?>? arguments]) {
+    lastInsertArguments = arguments;
+    return _db.rawInsert(sql, arguments);
+  }
 
   List<Map<String, Object?>> watch(
     String sql,
     List<Map<String, Object?>> rows,
   ) {
+    if (sql.trim().toLowerCase() == 'pragma encoding') {
+      encodingPragmas++;
+      if (missingEncodingPragma) return const [];
+    }
+    if (missingEncodingProbe && sql.contains('AS encoding_bytes')) {
+      return const [];
+    }
     if (sql.contains('substr(')) pieces++;
     for (final row in rows) {
       for (final value in row.values) {

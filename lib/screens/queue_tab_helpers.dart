@@ -455,3 +455,31 @@ final _queueLibraryPageProvider = FutureProvider.autoDispose
         nextCursor: page.nextCursor,
       );
     });
+
+/// The Songs view consumes this same prepared page as the Library overview.
+/// Each bounded database page is prepared before its rows appear. Other views
+/// and network artwork keep their existing behavior.
+final _preparedSongsPageProvider = FutureProvider.autoDispose
+    .family<_QueueLibraryPageData, (_QueueLibraryPageRequest, int)>((
+      ref,
+      key,
+    ) async {
+      final (request, cacheWidth) = key;
+      final page = await ref.watch(_queueLibraryPageProvider(request).future);
+      if (!ref.mounted) return page;
+      final preparation = prewarmSongListArtwork(
+        page.items.map((item) => item.filePath),
+        cacheWidth: cacheWidth,
+        isActive: () {
+          final lifecycle = WidgetsBinding.instance.lifecycleState;
+          return ref.mounted && (lifecycle == null ||
+              lifecycle == AppLifecycleState.resumed);
+        },
+        resolve: SongListArtworkCache.prepare,
+        transitioning: NowPlayingRoute.moving,
+      ).then((_) async {
+        if (ref.mounted) await SongListArtworkCache.maintain();
+      });
+      await waitForSongPageArtwork(preparation);
+      return page;
+    });

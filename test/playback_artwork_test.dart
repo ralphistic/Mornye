@@ -66,7 +66,8 @@ void main() {
           isNull,
         );
       }
-      expect(unnecessaryReads, 0);
+      // Existing thumbnails no longer suppress FLAC embedded extraction.
+      expect(unnecessaryReads, 2);
     },
   );
 
@@ -102,6 +103,69 @@ void main() {
       );
     },
   );
+
+  test(
+    'FLAC playback replaces a valid but stale scan thumbnail with embedded art',
+    () async {
+      final stale = File('${directory.path}/stale.png');
+      final embedded = File('${directory.path}/embedded.png');
+      await stale.writeAsBytes([1]);
+      await embedded.writeAsBytes([2]);
+      for (final source in [
+        '${directory.path}/song.flac',
+        'content://example.documents/music/song.flac',
+      ]) {
+        for (final artwork in [stale.path, stale.uri.toString()]) {
+          var reads = 0;
+          expect(
+            await resolveEmbeddedArtworkUri(
+              source,
+              artwork,
+              extract: (path) async {
+                expect(path, source);
+                reads++;
+                return embedded.path;
+              },
+            ),
+            embedded.uri.toString(),
+          );
+          expect(reads, 1);
+        }
+        // An extraction failure leaves the current artwork in place.
+        expect(
+          await resolveEmbeddedArtworkUri(
+            source,
+            stale.path,
+            extract: (_) async => null,
+          ),
+          isNull,
+        );
+      }
+    },
+  );
+
+  test('literal punctuation and Unicode do not turn local FLAC paths into URLs', () async {
+    final old = File('${directory.path}/old.png');
+    final fresh = File('${directory.path}/fresh.png');
+    await old.writeAsBytes([1]);
+    await fresh.writeAsBytes([2]);
+    for (final name in [
+      '12-65. Continue?.flac',
+      '4-31. Kirby Wins!.flac',
+      'Song #1 100% é 日本語.FLAC',
+      'literal%3F.flac',
+    ]) {
+      final source = '${directory.path}/$name';
+      expect(isLocalFlacArtworkSource(source), isTrue);
+      expect(await resolveEmbeddedArtworkUri(source, old.path, extract: (path) async {
+        expect(path, source);
+        return fresh.path;
+      }), fresh.uri.toString());
+    }
+    expect(isLocalFlacArtworkSource('content://docs/music/song.flac?token=x'), isTrue);
+    expect(isLocalFlacArtworkSource('https://host/music/song.flac?x=1'), isFalse);
+    expect(isLocalFlacArtworkSource('/music/file?.mp3'), isFalse);
+  });
 
   test(
     'restored queue replaces a removed scan cover with current Library art',

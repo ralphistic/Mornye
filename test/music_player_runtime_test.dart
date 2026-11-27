@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mornye/controllers/player_metadata_controller.dart';
 import 'package:mornye/models/library_collections.dart';
 import 'package:mornye/models/settings.dart';
@@ -21,6 +22,7 @@ import 'package:mornye/services/autoplay_ranker.dart';
 import 'package:mornye/services/autoplay_taste.dart';
 import 'package:mornye/services/background_favorites.dart';
 import 'package:mornye/services/cover_store.dart';
+import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
 import 'package:mornye/services/cast_output.dart';
 import 'package:mornye/services/history_database.dart';
 import 'package:mornye/services/library_collections_database.dart';
@@ -60,6 +62,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart'
     show databaseFactoryFfi, sqfliteFfiInit;
 
 import 'support/fixed_settings.dart';
+import 'support/prepared_playback_artwork_fixture.dart';
 import 'support/link_fakes.dart';
 import 'support/virtual_time.dart';
 
@@ -201,6 +204,35 @@ class _CastDeck extends _Deck {
     await states.close();
     await completions.close();
     await super.dispose();
+  }
+}
+
+class _TransitionDeck extends _CastDeck {
+  Completer<void>? nextSourceGate;
+  final nextSourceStarted = Completer<void>();
+
+  @override
+  Future<void> setFileSource(
+    String path, {
+    bool preferBitPerfect = false,
+    bool directUsb = false,
+    bool allowDop = false,
+    bool requiresDsd = false,
+    bool allowFixedVolume = false,
+    bool dapExclusive = false,
+    int usbMaxSampleRate = 0,
+    bool usbDitherHighPass = false,
+  }) async {
+    await super.setFileSource(path,
+      preferBitPerfect: preferBitPerfect, directUsb: directUsb,
+      allowDop: allowDop, requiresDsd: requiresDsd,
+      allowFixedVolume: allowFixedVolume, dapExclusive: dapExclusive,
+      usbMaxSampleRate: usbMaxSampleRate, usbDitherHighPass: usbDitherHighPass,
+    );
+    if (nextSourceGate case final gate?) {
+      if (!nextSourceStarted.isCompleted) nextSourceStarted.complete();
+      await gate.future;
+    }
   }
 }
 
@@ -398,6 +430,18 @@ class _Session implements AudioSession {
 }
 
 class _SessionStore implements AppStateDatabase {
+  ({bool shuffle, String repeatMode})? modes;
+
+  @override
+  Future<({bool shuffle, String repeatMode})?> getPlaybackModes() async => modes;
+
+  @override
+  Future<void> savePlaybackModes({
+    required bool shuffle, required String repeatMode,
+  }) async {
+    modes = (shuffle: shuffle, repeatMode: repeatMode);
+  }
+
   int clears = 0;
   int? persistedPositionMs;
 
@@ -846,6 +890,394 @@ const _track = PlayableMedia(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  group('iOS playback continuity', () {
+    late Directory root;
+    late List<PlayableMedia> songs;
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    const paths = MethodChannel('plugins.flutter.io/path_provider');
+    const transition = MethodChannel('xyz.luan/audioplayers.global');
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      root = await Directory.systemTemp.createTemp('ios-playback-continuity-');
+      messenger.setMockMethodCallHandler(paths, (_) async => root.path);
+      songs = [
+        for (var i = 0; i < 3; i++)
+          PlayableMedia(
+            id: 'continuity-$i',
+            source: (await File('${root.path}/song-$i.m4a').writeAsString('audio')).path,
+            title: 'Track $i', artist: 'Artist', album: 'Album',
+            artUri: 'https://example.com/cover.jpg',
+            duration: const Duration(seconds: 60),
+          ),
+      ];
+    });
+
+    tearDown(() async {
+      messenger.setMockMethodCallHandler(paths, null);
+      messenger.setMockMethodCallHandler(transition, null);
+      await root.delete(recursive: true);
+    });
+
+    Future<void> until(bool Function() ready) async {
+      for (var i = 0; i < 200; i++) {
+        if (ready()) return;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      fail('Playback continuity condition not reached');
+    }
+
+    test('pause, seek and app relaunch restore the exact queue and playhead', () async {
+      sqfliteFfiInit();
+      final db = await AppStateDatabase.openWithFactory(databaseFactoryFfi, '${root.path}/state.db');
+      final store = AppStateDatabase.withDatabase(db);
+      final decks = <_Deck>[];
+      final first = _runtime(isIOS: true, sessionDatabase: store, decks: decks);
+      final player = await first.initialize();
+      await player.setQueueAndPlay(songs, initialIndex: 1, shuffle: true);
+      await player.setRepeatMode(AudioServiceRepeatMode.all);
+      decks.single.position = const Duration(milliseconds: 23175);
+      await player.pause();
+      expect((await store.getPlaybackSession())?['positionMs'], 23175);
+      expect(player.playbackState.value.updatePosition.inMilliseconds, 23175);
+      const target = Duration(milliseconds: 34781);
+      await player.seek(target);
+      expect((await store.getPlaybackSession())?['positionMs'], target.inMilliseconds);
+      player.didChangeAppLifecycleState(AppLifecycleState.inactive);
+      player.didChangeAppLifecycleState(AppLifecycleState.paused);
+      await player.persistCurrentSession();
+      await first.dispose();
+      // Close and reopen the database, rather than keeping its connection
+      // alive across a simulated process restart.
+      await db.close();
+      final reopened = await AppStateDatabase.openWithFactory(
+        databaseFactoryFfi, '${root.path}/state.db',
+      );
+      addTearDown(reopened.close);
+      final reopenedStore = AppStateDatabase.withDatabase(reopened);
+      expect((await reopenedStore.getPlaybackSession())?['positionMs'], target.inMilliseconds);
+
+      // A suspended audio session can deliver an interruption before the
+      // newly initialized handler has loaded any of its persisted queue.
+      final session = _Session();
+      final freshDecks = <_Deck>[];
+      final fresh = _runtime(isIOS: true, session: session, sessionDatabase: reopenedStore,
+        decks: freshDecks);
+      final restored = await fresh.initialize();
+      await _settle();
+      session.interruptions.add(AudioInterruptionEvent(true, AudioInterruptionType.unknown));
+      await _settle();
+      expect(await reopenedStore.getPlaybackSession(), isNotNull,
+        reason: 'startup interruption must not erase the saved session');
+      await fresh.restoreSession();
+      expect(restored.mediaItem.value?.id, songs[1].id);
+      expect(restored.queue.value.map((item) => item.id), songs.map((song) => song.id));
+      expect(restored.playbackState.value.updatePosition, target);
+      expect(restored.playbackState.value.playing, isFalse);
+      expect(restored.playbackState.value.shuffleMode, AudioServiceShuffleMode.all);
+      expect(restored.playbackState.value.repeatMode, AudioServiceRepeatMode.all);
+      expect(freshDecks.single.sources, isEmpty);
+      expect(session.activations, isEmpty);
+      await restored.play();
+      expect(freshDecks.single.position, target);
+      expect(restored.playbackState.value.playing, isTrue);
+    });
+
+    test('repeat and shuffle survive relaunch even without an active queue', () async {
+      sqfliteFfiInit();
+      final path = '${root.path}/modes.db';
+      final db = await AppStateDatabase.openWithFactory(databaseFactoryFfi, path);
+      final store = AppStateDatabase.withDatabase(db);
+      final first = _runtime(isIOS: true, sessionDatabase: store);
+      final player = await first.initialize();
+      await player.setShuffleMode(AudioServiceShuffleMode.all);
+      await player.setRepeatMode(AudioServiceRepeatMode.one);
+      expect(await store.getPlaybackSession(), isNull);
+      expect(await store.getPlaybackModes(), (shuffle: true, repeatMode: 'one'));
+      await first.dispose();
+      await db.close();
+      final reopened = await AppStateDatabase.openWithFactory(databaseFactoryFfi, path);
+      addTearDown(reopened.close);
+      final freshStore = AppStateDatabase.withDatabase(reopened);
+      final fresh = _runtime(isIOS: true, sessionDatabase: freshStore);
+      await fresh.restoreSession();
+      final restored = fresh.handler!;
+      expect(restored.mediaItem.value, isNull);
+      expect(restored.playbackState.value.shuffleMode, AudioServiceShuffleMode.all);
+      expect(restored.playbackState.value.repeatMode, AudioServiceRepeatMode.one);
+      await restored.setShuffleMode(AudioServiceShuffleMode.none);
+      await restored.setRepeatMode(AudioServiceRepeatMode.none);
+      expect(await freshStore.getPlaybackModes(), (shuffle: false, repeatMode: 'none'));
+      await fresh.dispose();
+      final third = _runtime(isIOS: true, sessionDatabase: freshStore);
+      await third.restoreSession();
+      expect(third.handler!.playbackState.value.shuffleMode, AudioServiceShuffleMode.none);
+      expect(third.handler!.playbackState.value.repeatMode, AudioServiceRepeatMode.none);
+    });
+
+    test('background FLAC completion publishes artwork without decoded images', () async {
+      final calls = <String>[];
+      final tracks = <PlayableMedia>[];
+      DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(
+        Directory('${root.path}/previews'),
+      );
+      mockPreparedArtworkExtraction(calls);
+      PlaybackArtworkCache.displayWidthForTesting = 64;
+      addTearDown(() async {
+        PlaybackArtworkCache.displayWidthForTesting = null;
+        await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting(
+          preservePersistentFiles: false,
+        );
+        DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(null);
+        clearPreparedArtworkExtraction();
+      });
+      for (var i = 0; i < 4; i++) {
+        final source = File('${root.path}/background $i?.flac');
+        await writeArtworkFlac(source, await artworkPng(i));
+        tracks.add(PlayableMedia(
+          id: 'background-$i', source: source.path, title: 'Background $i',
+          artist: 'Artist', duration: const Duration(seconds: 60),
+        ));
+      }
+      final deck = _CastDeck();
+      final player = await _runtime(
+        isIOS: true, createDeck: (_) => deck,
+        settings: const AppSettings(pauseOnMute: false, gaplessPlayback: false,
+          autoplay: false, autoMix: false),
+      ).initialize();
+      await player.setQueueAndPlay(tracks);
+      await until(() => tracks.every((track) =>
+        PlaybackArtworkCache.readyPath(track.source) != null));
+      final expected = {
+        for (final track in tracks)
+          track.id: Uri.file(PlaybackArtworkCache.readyPath(track.source)!),
+      };
+      player.didChangeAppLifecycleState(AppLifecycleState.paused);
+      PlaybackArtworkCache.clearDecoded();
+      // No renderer-owned image exists, but the system has the verified file.
+      expect(PlaybackArtworkCache.readyPath(tracks[1].source), isNull);
+      expect(PlaybackArtworkCache.readyFilePath(tracks[1].source), isNotNull);
+      deck.complete();
+      await until(() => player.mediaItem.value?.id == tracks[1].id &&
+        player.playbackState.value.processingState == AudioProcessingState.ready);
+      expect(player.mediaItem.value!.artUri, expected[tracks[1].id]);
+      expect(PlaybackArtworkCache.readyPath(tracks[1].source), isNull);
+      // Force a cold preparation. The next song's file must still be
+      // published without waiting for a graphics context.
+      PlaybackArtworkCache.invalidate(tracks[2].source);
+      deck.complete();
+      await until(() => player.mediaItem.value?.id == tracks[2].id &&
+        player.mediaItem.value?.artUri == expected[tracks[2].id] &&
+        player.playbackState.value.processingState == AudioProcessingState.ready);
+      expect(PlaybackArtworkCache.readyPath(tracks[2].source), isNull);
+      expect(PlaybackArtworkCache.readyFilePath(tracks[2].source), isNotNull);
+      expect(player.playbackState.value.playing, isTrue);
+      expect(calls, hasLength(tracks.length));
+    }, skip: Platform.isWindows);
+
+    test('completion keeps controls active through next-source preparation', () async {
+      final methods = <MethodCall>[];
+      messenger.setMockMethodCallHandler(transition, (call) async {
+        methods.add(call);
+        return call.method == 'musicTransitionTicket' ? 17 : null;
+      });
+      final deck = _TransitionDeck();
+      final player = await _runtime(
+        isIOS: true,
+        createDeck: (_) => deck,
+        settings: const AppSettings(pauseOnMute: false, gaplessPlayback: false,
+          autoplay: false, autoMix: false),
+      ).initialize();
+      await player.setQueueAndPlay(songs);
+      final states = <PlaybackState>[];
+      final subscription = player.playbackState.listen(states.add);
+      addTearDown(subscription.cancel);
+      final gate = deck.nextSourceGate = Completer<void>();
+      try {
+        deck.complete();
+        await deck.nextSourceStarted.future.timeout(const Duration(seconds: 3));
+        expect(player.mediaItem.value?.id, songs[1].id);
+        expect(player.playbackState.value.playing, isTrue);
+        expect(player.playbackState.value.processingState, AudioProcessingState.loading);
+        expect(methods.map((call) => call.method), ['musicTransitionTicket']);
+        expect(states.every((state) => state.playing &&
+          state.processingState != AudioProcessingState.idle), isTrue);
+      } finally {
+        gate.complete();
+      }
+      await until(() => methods.any((call) => call.method == 'finishMusicTransition'));
+      expect(deck.state, PlaybackDeckState.playing);
+      expect(player.playbackState.value.processingState, AudioProcessingState.ready);
+      expect(methods.last.arguments, {'token': 17});
+      expect(states.every((state) => state.playing), isTrue);
+    });
+
+    test('real audio interruption and explicit pause never advance the queue', () async {
+      final session = _Session();
+      final deck = _CastDeck();
+      final player = await _runtime(
+        isIOS: true, session: session, createDeck: (_) => deck,
+        settings: const AppSettings(pauseOnMute: false, gaplessPlayback: false,
+          autoplay: false, autoMix: false),
+      ).initialize();
+      await player.setQueueAndPlay(songs);
+      session.interruptions.add(AudioInterruptionEvent(true, AudioInterruptionType.pause));
+      await until(() => !player.playbackState.value.playing);
+      deck.complete();
+      await _settle();
+      expect(player.mediaItem.value?.id, songs.first.id);
+      expect(player.playbackState.value.playing, isFalse);
+      await player.pause();
+      session.interruptions.add(AudioInterruptionEvent(false, AudioInterruptionType.pause));
+      await _settle();
+      expect(player.mediaItem.value?.id, songs.first.id);
+      expect(player.playbackState.value.playing, isFalse);
+    });
+  });
+
+  test('iOS manual song selection publishes the verified thumbnail without waiting for full artwork', () async {
+    final root = await Directory.systemTemp.createTemp('player-selected-cover');
+    final calls = <String>[];
+    final release = Completer<void>();
+    final source = File('${root.path}/selected.flac');
+    DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(
+      Directory('${root.path}/previews'),
+    );
+    mockPreparedArtworkExtraction(calls);
+    PlaybackArtworkCache.displayWidthForTesting = 64;
+    addTearDown(() async {
+      if (!release.isCompleted) release.complete();
+      PlaybackArtworkCache.displayWidthForTesting = null;
+      await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting(
+        preservePersistentFiles: false,
+      );
+      DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(null);
+      clearPreparedArtworkExtraction();
+      await root.delete(recursive: true);
+    });
+    await writeArtworkFlac(source, await artworkPng(42));
+    final thumb = (await SongListArtworkCache.prepare(source.path))!;
+    final full = (await DownloadedEmbeddedCoverResolver.resolveOrExtract(source.path))!;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(preparedArtworkBackend, (call) async {
+      if (call.method != 'extractCoverToFile') {
+        return jsonEncode({'error': 'not available in test'});
+      }
+      await release.future;
+      final args = call.arguments as Map;
+      await File(args['output_path'] as String).writeAsBytes(
+        await readArtworkPicture(args['audio_path'] as String),
+      );
+      return jsonEncode({'success': true});
+    });
+    await File(full).delete();
+    expect(SongListArtworkCache.verifiedThumbnailPath(source.path), thumb);
+
+    final handler = await _runtime(
+      isIOS: true,
+      settings: const AppSettings(pauseOnMute: false, gaplessPlayback: false,
+        autoplay: false, autoMix: false),
+    ).initialize();
+    final selected = PlayableMedia(
+      id: 'manual-selected', source: source.path, title: 'Selected',
+      artist: 'Artist', duration: const Duration(seconds: 60),
+    );
+    try {
+      await handler.setQueueAndPlay([selected]);
+      final initial = handler.mediaItem.value!;
+      expect(initial.id, selected.id);
+      expect(initial.artUri, isNull, reason: 'do not publish a thumbnail to system metadata');
+      expect(initial.extras?['embeddedArtworkPending'], isTrue);
+      expect(initial.extras?['embeddedArtworkPreview'], Uri.file(thumb).toString());
+    } finally {
+      if (!release.isCompleted) release.complete();
+    }
+    for (var i = 0; i < 400; i++) {
+      if (handler.mediaItem.value?.extras?['embeddedArtworkPending'] == false) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    final upgraded = handler.mediaItem.value!;
+    expect(upgraded.id, selected.id);
+    expect(upgraded.artUri, Uri.file(PlaybackArtworkCache.readyPath(source.path)!));
+    expect(upgraded.extras?['embeddedArtworkPreview'], isNull);
+  }, skip: Platform.isWindows);
+
+  test('prepared iOS FLAC covers publish with each rapid transport change', () async {
+    final root = await Directory.systemTemp.createTemp('player-prepared-covers');
+    final calls = <String>[];
+    final songs = <PlayableMedia>[];
+    DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(
+      Directory('${root.path}/previews'),
+    );
+    mockPreparedArtworkExtraction(calls);
+    PlaybackArtworkCache.displayWidthForTesting = 64;
+    addTearDown(() async {
+      PlaybackArtworkCache.displayWidthForTesting = null;
+      await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting(
+        preservePersistentFiles: false,
+      );
+      DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(null);
+      clearPreparedArtworkExtraction();
+      await root.delete(recursive: true);
+    });
+    for (var i = 0; i < 8; i++) {
+      final source = File('${root.path}/track $i?.flac');
+      await writeArtworkFlac(source, await artworkPng(i));
+      songs.add(PlayableMedia(
+        id: 'track-$i', source: source.path, title: 'Track $i',
+        artist: 'Artist', duration: const Duration(seconds: 60),
+      ));
+    }
+    final handler = await _runtime(
+      isIOS: true,
+      settings: const AppSettings(pauseOnMute: false, gaplessPlayback: false,
+        autoplay: false, autoMix: false),
+    ).initialize();
+    await handler.setQueueAndPlay(songs);
+    // The actual transport, not the test, starts preparation of upcoming
+    // and preceding queue entries. At the initial position the 8 fit in
+    // the full-size decoded budget.
+    for (var i = 0; i < 400; i++) {
+      if (songs.every((s) => PlaybackArtworkCache.readyPath(s.source) != null) &&
+          handler.mediaItem.value?.artUri != null &&
+          handler.mediaItem.value?.extras?['embeddedArtworkPending'] != true) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    final expected = {
+      for (final song in songs) song.id:
+          Uri.file(PlaybackArtworkCache.readyPath(song.source)!),
+    };
+    final events = <MediaItem>[];
+    final subscription = handler.mediaItem.listen((item) {
+      if (item != null) events.add(item);
+    });
+    addTearDown(subscription.cancel);
+    for (var i = 1; i < songs.length; i++) {
+      await handler.skipToNext();
+      expect(handler.mediaItem.value!.id, songs[i].id);
+      expect(handler.mediaItem.value!.artUri, expected[songs[i].id]);
+    }
+    for (var i = songs.length - 2; i >= 0; i--) {
+      await handler.skipToPrevious();
+      expect(handler.mediaItem.value!.id, songs[i].id);
+      expect(handler.mediaItem.value!.artUri, expected[songs[i].id]);
+    }
+    await Future.wait([for (var i = 0; i < 5; i++) handler.skipToNext()]);
+    expect(handler.mediaItem.value!.id, songs[5].id);
+    await _settle();
+    expect(events, isNotEmpty);
+    for (final item in events) {
+      expect(item.artUri, expected[item.id], reason: item.id);
+      expect(item.extras?['embeddedArtworkPending'], isNot(true));
+    }
+    expect(calls, hasLength(songs.length),
+        reason: 'no repeated native extraction while skipping prewarmed tracks');
+  }, skip: Platform.isWindows);
 
   test('exclusive gapless advances metadata on one continuous deck', () async {
     final deck = _QueuedDeck();

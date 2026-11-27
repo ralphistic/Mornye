@@ -5,6 +5,7 @@ import 'package:mornye/widgets/open_audio_button.dart';
 import 'package:flutter/foundation.dart'
     show ValueListenable, listEquals, setEquals;
 import 'package:material_ui/material_ui.dart';
+import 'package:mornye/widgets/ios_status_bar_scroll_target.dart';
 import 'package:mornye/widgets/app_alert_dialog.dart';
 import 'package:mornye/widgets/app_choice_chip.dart';
 import 'package:mornye/widgets/app_content_card.dart';
@@ -56,6 +57,7 @@ import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/widgets/app_shape.dart';
 import 'package:mornye/widgets/library_fast_scroller.dart';
 import 'package:mornye/widgets/player_artwork.dart';
+import 'package:mornye/routes/now_playing_route.dart';
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/utils/adaptive_layout.dart';
 import 'package:mornye/utils/audio_quality_badge_policy.dart';
@@ -110,6 +112,7 @@ import 'package:mornye/widgets/animation_utils.dart';
 import 'package:mornye/widgets/selection_bottom_bar.dart';
 import 'package:mornye/widgets/smoothed_progress.dart';
 import 'package:mornye/widgets/song_row_tap.dart';
+import 'package:mornye/widgets/song_list_artwork_prewarm.dart';
 import 'package:mornye/widgets/track_collection_quick_actions.dart';
 import 'package:mornye/widgets/two_finger_pinch_listener.dart';
 import 'package:mornye/utils/desktop_platform.dart';
@@ -134,6 +137,37 @@ part 'queue_tab_download_dialogs.dart';
 part 'queue_tab_filter_sheet.dart';
 
 const _historyItemForCompletionBridge = CompletionBridgeTracker.historyItemFor;
+
+/// Retain the initial prepared Songs page from the shell, including when the
+/// Home tab is visible. The library is ready before the user opens Songs.
+void watchInitialSongListArtwork(WidgetRef ref, BuildContext context) {
+  if (!Platform.isIOS) return;
+  final (sortMode, localEnabled) = ref.watch(
+    settingsProvider.select((s) => (s.historySortMode, s.localLibraryEnabled)),
+  );
+  final request = _QueueLibraryPageRequest(
+    filterMode: 'all',
+    limit: _QueueTabState._libraryPageSize,
+    offset: 0,
+    searchQuery: '',
+    filterSource: null,
+    filterQuality: null,
+    filterFormat: null,
+    filterMetadata: null,
+    sortMode: sortMode,
+    localLibraryEnabled: localEnabled,
+  );
+  // Keep the provider alive without rebuilding the shell as each page loads.
+  ref.watch(
+    _preparedSongsPageProvider(
+      (request, (context.tokens.coverList * 2).toInt()),
+    ).select((_) => 0),
+  );
+}
+
+void refreshPreparedSongListArtwork(WidgetRef ref) {
+  if (Platform.isIOS) ref.invalidate(_preparedSongsPageProvider);
+}
 
 class QueueTab extends ConsumerStatefulWidget {
   final String? librarySection;
@@ -375,6 +409,9 @@ class _QueueTabState extends ConsumerState<QueueTab> {
     DownloadedEmbeddedCoverResolver.previewsCleared.addListener(
       _onEmbeddedCoverChanged,
     );
+    if (Platform.isIOS) {
+      SongListArtworkCache.changes.addListener(_onSongThumbnailChanged);
+    }
     _completionBridgePlayableProbe = CompletionBridgePlayableProbeCache(
       onPlayable: _fileExistsCache.markExists,
     );
@@ -452,6 +489,9 @@ class _QueueTabState extends ConsumerState<QueueTab> {
     DownloadedEmbeddedCoverResolver.previewsCleared.removeListener(
       _onEmbeddedCoverChanged,
     );
+    if (Platform.isIOS) {
+      SongListArtworkCache.changes.removeListener(_onSongThumbnailChanged);
+    }
     _slideSelect.dispose();
     _hideSelectionOverlay();
     _hidePlaylistSelectionOverlay();
@@ -639,6 +679,10 @@ class _QueueTabState extends ConsumerState<QueueTab> {
     );
   }
 
+  void _onSongThumbnailChanged() {
+    _onEmbeddedCoverChanged(SongListArtworkCache.changes.value.$1);
+  }
+
   void _onEmbeddedCoverChanged([String? filePath]) {
     if (!mounted) return;
     final cleanPath = DownloadedEmbeddedCoverResolver.cleanFilePath(filePath);
@@ -774,7 +818,8 @@ class _QueueTabState extends ConsumerState<QueueTab> {
         downloadQueueLookupProvider.select((s) => s.notCompletedItemIds),
       );
       final colors = Theme.of(context).colorScheme;
-      return CustomScrollView(
+      final scrollView = CustomScrollView(
+        controller: Platform.isIOS ? _libraryScrollController : null,
         slivers: [
           AppSliverHeader.page(title: context.l10n.libraryDownloads),
           _buildQueueHeaderSliver(context, colors),
@@ -802,6 +847,10 @@ class _QueueTabState extends ConsumerState<QueueTab> {
             ),
           const NavBarSliverSpacer(),
         ],
+      );
+      return IosStatusBarScrollTarget(
+        controller: _libraryScrollController,
+        child: scrollView,
       );
     }
 
@@ -943,12 +992,21 @@ class _QueueTabState extends ConsumerState<QueueTab> {
 
     final activePageRequest = pageRequest(historyFilterMode);
     // The Artists, Genres and Folders pages browse their own queries.
+    final prepareSongListArtwork = Platform.isIOS &&
+        historyFilterMode == 'all' &&
+        (widget.librarySection != null || historyViewMode == 'list');
     final activePageValue =
         searchingLibrary ||
             historyFilterMode == 'artists' ||
             historyFilterMode == 'genres' ||
             historyFilterMode == 'folders'
         ? const AsyncData(_QueueLibraryPageData())
+        : prepareSongListArtwork
+        ? ref.watch(
+            _preparedSongsPageProvider(
+              (activePageRequest, (context.tokens.coverList * 2).toInt()),
+            ),
+          )
         : ref.watch(_queueLibraryPageProvider(activePageRequest));
 
     // The in-memory snapshot regroups every history item. It is only needed
@@ -1025,6 +1083,37 @@ class _QueueTabState extends ConsumerState<QueueTab> {
     final hasMoreLibrary = currentLoadedCount < currentTotalCount;
     final isLibraryPageLoading =
         countsValue.isLoading || activePageValue.isLoading;
+    // Stage the immediately following Songs page while the current one is
+    // visible. Use its exact key/cursor so a near-end scroll reuses the work.
+    // Keep the existing 300-song page size and queue ordering.
+    final livePage = activePageValue.asData?.value;
+    if (prepareSongListArtwork &&
+        !searchingLibrary &&
+        !activePageValue.isLoading &&
+        hasMoreLibrary &&
+        livePage != null &&
+        livePage.items.length == activePageRequest.limit &&
+        TickerMode.valuesOf(context).enabled &&
+        (ModalRoute.isCurrentOf(context) ?? true)) {
+      final nextRequest = _QueueLibraryPageRequest(
+        filterMode: activePageRequest.filterMode,
+        limit: activePageRequest.limit,
+        offset: activePageRequest.offset + activePageRequest.limit,
+        searchQuery: activePageRequest.searchQuery,
+        filterSource: activePageRequest.filterSource,
+        filterQuality: activePageRequest.filterQuality,
+        filterFormat: activePageRequest.filterFormat,
+        filterMetadata: activePageRequest.filterMetadata,
+        sortMode: activePageRequest.sortMode,
+        localLibraryEnabled: activePageRequest.localLibraryEnabled,
+        cursor: livePage.nextCursor,
+      );
+      ref.watch(
+        _preparedSongsPageProvider(
+          (nextRequest, (context.tokens.coverList * 2).toInt()),
+        ).select((_) => 0),
+      );
+    }
     final hasAnyLibraryItems =
         queueCounts.allTrackCount > 0 || queueCounts.albumCount > 0;
     final hasLibraryContent =
@@ -1296,7 +1385,14 @@ class _QueueTabState extends ConsumerState<QueueTab> {
             .firstOrNull;
         if (anchor != null) _playLibraryItem(anchor, selectionItems);
       },
-      child: page,
+      child: IosStatusBarScrollTarget(
+        controller: _libraryScrollController,
+        hasMoreScrollOffset: () =>
+            _libraryScrollKey.currentState?.innerController.positions.any(
+              (position) => position.pixels > position.minScrollExtent,
+            ) ?? false,
+        child: page,
+      ),
     );
   }
 

@@ -120,6 +120,7 @@ extension _TrackMetadataCover on _TrackMetadataScreenState {
           sourcePath == cleanFilePath) {
         setState(() {
           _embeddedCoverPreviewPath = null;
+          _initialEmbeddedThumbnail = null;
           _embeddedCoverDimensions = null;
         });
       }
@@ -137,9 +138,10 @@ extension _TrackMetadataCover on _TrackMetadataScreenState {
     String? newPreviewPath;
     ({int width, int height})? newDimensions;
     try {
-      newPreviewPath = await DownloadedEmbeddedCoverResolver.resolveOrExtract(
-        sourcePath,
-      );
+      newPreviewPath = _initialEmbeddedThumbnail != null &&
+              PlaybackArtworkCache.supports(sourcePath)
+          ? await PlaybackArtworkCache.prepareFile(sourcePath)
+          : await DownloadedEmbeddedCoverResolver.resolveOrExtract(sourcePath);
       if (newPreviewPath != null) {
         final cachedCover = force
             ? null
@@ -190,6 +192,11 @@ extension _TrackMetadataCover on _TrackMetadataScreenState {
 
     setState(() {
       _embeddedCoverPreviewPath = newPreviewPath;
+      if (newPreviewPath != null ||
+          SongListArtworkCache.verifiedThumbnailPath(sourcePath) !=
+              _initialEmbeddedThumbnail) {
+        _initialEmbeddedThumbnail = null;
+      }
       _embeddedCoverDimensions = newDimensions;
     });
     if (oldPreviewPath != null && oldPreviewPath != newPreviewPath) {

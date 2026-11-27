@@ -61,6 +61,9 @@ void main() {
   var prefix = '';
   Completer<LibraryBrowsePage>? pending;
   Object? failure;
+  Completer<void>? artworkPending;
+  Completer<void>? artworkStarted;
+  late List<List<String>> preparedPages;
 
   setUp(() {
     requests = [];
@@ -68,11 +71,20 @@ void main() {
     prefix = '';
     pending = null;
     failure = null;
+    artworkPending = null;
+    artworkStarted = null;
+    preparedPages = [];
     container = ProviderContainer(
       overrides: [
         settingsProvider.overrideWith(_Settings.new),
         downloadHistoryProvider.overrideWith(_History.new),
         localLibraryProvider.overrideWith(_Local.new),
+        libraryBrowseArtworkPreparerProvider.overrideWithValue((entries, active) async {
+          expect(active(), isTrue);
+          preparedPages.add(entries.map((entry) => entry.key).toList());
+          artworkStarted?.complete();
+          if (artworkPending != null) await artworkPending!.future;
+        }),
         libraryBrowsePageLoaderProvider.overrideWithValue((page) async {
           requests.add(page);
           if (failure != null) throw failure!;
@@ -177,6 +189,24 @@ void main() {
       );
     },
   );
+
+  test('pagination keeps the old page until new artwork is prepared', () async {
+    final provider = libraryBrowseProvider(_request);
+    final first = await container.read(provider.future);
+    expect(preparedPages.single, List.generate(40, (i) => '$i'));
+    artworkPending = Completer<void>();
+    artworkStarted = Completer<void>();
+    final loading = container.read(provider.notifier).loadMore();
+    await artworkStarted!.future;
+    expect(preparedPages.last, List.generate(40, (i) => '${i + 40}'));
+    final current = container.read(provider).requireValue;
+    expect(current.entries, same(first.entries));
+    expect(current.isLoadingMore, isTrue);
+    artworkPending!.complete();
+    await loading;
+    expect(container.read(provider).requireValue.entries, hasLength(80));
+    expect(container.read(provider).requireValue.isLoadingMore, isFalse);
+  });
 
   test('failed next page retains rows and retries the same cursor', () async {
     final provider = libraryBrowseProvider(_request);

@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
+
+import 'package:flutter/widgets.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/providers/download_history_provider.dart';
@@ -6,6 +10,8 @@ import 'package:mornye/providers/local_library_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/services/album_completeness.dart';
 import 'package:mornye/services/library_database.dart';
+import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
+import 'package:mornye/widgets/album_browse_artwork.dart';
 
 typedef LibraryBrowseRequest = ({
   bool artists,
@@ -132,6 +138,34 @@ final libraryBrowsePageLoaderProvider =
       },
     );
 
+/// Like the prepared Songs page, ensure each bounded album page has small
+/// decoded artwork before publishing its rows. Existing rows stay visible
+/// while pagination prepares the next page. Other platforms are unchanged.
+typedef LibraryBrowseArtworkPreparer = Future<void> Function(
+  List<LibraryBrowseEntry> entries,
+  bool Function() isActive,
+);
+
+final libraryBrowseArtworkPreparerProvider =
+    Provider<LibraryBrowseArtworkPreparer>((ref) => (entries, isActive) async {
+      if (!Platform.isIOS || entries.isEmpty) return;
+      final cache = AlbumBrowseArtworkCache.shared;
+      cache.ensureListeners();
+      bool active() {
+        final lifecycle = WidgetsBinding.instance.lifecycleState;
+        return ref.mounted && isActive() &&
+            (lifecycle == null || lifecycle == AppLifecycleState.resumed);
+      }
+      await prewarmAlbumBrowseArtwork(
+        entries.take(cache.maxEntries).map(
+          (entry) => (filePath: entry.samplePath, cover: entry.cover),
+        ),
+        cache: cache,
+        isActive: active,
+      );
+      if (active()) unawaited(SongListArtworkCache.maintain());
+    });
+
 final libraryBrowseProvider = AsyncNotifierProvider.autoDispose
     .family<LibraryBrowseNotifier, LibraryBrowseState, LibraryBrowseRequest>(
       LibraryBrowseNotifier.new,
@@ -181,6 +215,7 @@ class LibraryBrowseNotifier extends AsyncNotifier<LibraryBrowseState> {
       ref.watch(localLibraryProvider.select((s) => s.loadedIndexVersion));
     }
     final loadPage = ref.watch(libraryBrowsePageLoaderProvider);
+    final prepareArtwork = ref.watch(libraryBrowseArtworkPreparerProvider);
     final generation = ++_generation;
     _loadingMore = false;
     // Refresh the loaded range in bounded reads. Keep the old range visible
@@ -207,6 +242,14 @@ class LibraryBrowseNotifier extends AsyncNotifier<LibraryBrowseState> {
       if (!ref.mounted || generation != _generation) {
         return LibraryBrowseState(rows, hasMore: false);
       }
+      if (!request.artists) {
+        await prepareArtwork(
+          page.entries, () => ref.mounted && generation == _generation,
+        );
+        if (!ref.mounted || generation != _generation) {
+          return LibraryBrowseState(rows, hasMore: false);
+        }
+      }
       rows.addAll(page.entries);
       cursor = page.nextCursor;
     } while (page.entries.length == pageLimit && rows.length < target);
@@ -231,6 +274,12 @@ class LibraryBrowseNotifier extends AsyncNotifier<LibraryBrowseState> {
         _pageRequest(_rows.length, _cursor),
       );
       if (!ref.mounted || generation != _generation) return;
+      if (!request.artists) {
+        await ref.read(libraryBrowseArtworkPreparerProvider)(
+          page.entries, () => ref.mounted && generation == _generation,
+        );
+        if (!ref.mounted || generation != _generation) return;
+      }
       _rows = List.unmodifiable([..._rows, ...page.entries]);
       _cursor = page.nextCursor;
       _hasMore = page.entries.length == request.limit;

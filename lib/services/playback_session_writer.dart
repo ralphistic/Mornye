@@ -63,6 +63,9 @@ class PlaybackSessionWriter {
 
   int get queueRevision => _queueRevision;
 
+  /// Wait for writes already queued, including an in-flight queue encode.
+  Future<void> flush() => _tail;
+
   void queueChanged() => _queueRevision++;
 
   void queueRestored({required bool needsRewrite}) {

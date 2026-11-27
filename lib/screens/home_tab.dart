@@ -5,6 +5,7 @@ import 'package:cupertino_ui/cupertino_ui.dart'
     show CupertinoButton, CupertinoIcons;
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:mornye/widgets/ios_status_bar_scroll_target.dart';
 import 'package:mornye/widgets/app_snack_bar.dart';
 import 'package:mornye/widgets/tv_navigation.dart';
 import 'package:mornye/theme/app_tokens.dart';
@@ -1024,7 +1025,7 @@ class _HomeTabState extends ConsumerState<HomeTab>
       });
     }
 
-    return GestureDetector(
+    final content = GestureDetector(
       onTap: () {
         if (_searchFocusNode.hasFocus) {
           _searchFocusNode.unfocus();
@@ -1088,6 +1089,10 @@ class _HomeTabState extends ConsumerState<HomeTab>
           ),
         ),
       ),
+    );
+    return IosStatusBarScrollTarget(
+      controller: _homeScrollController,
+      child: content,
     );
   }
 

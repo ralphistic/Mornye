@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:material_ui/material_ui.dart';
+import 'package:mornye/widgets/ios_status_bar_scroll_target.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:mornye/constants/app_info.dart';
@@ -151,6 +152,7 @@ class SettingsTab extends ConsumerStatefulWidget {
 
 class _SettingsTabState extends ConsumerState<SettingsTab> {
   final TextEditingController _searchController = TextEditingController();
+  final _settingsScroll = ScrollController();
   final FocusNode _searchFocusNode = FocusNode();
   AppLocalizations? _cachedLocalizations;
   bool? _cachedBuiltInPlayer;
@@ -223,6 +225,7 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
   void dispose() {
     ShellNavigationService.unregisterSettingsDetailNavigator(this);
     _searchController.dispose();
+    _settingsScroll.dispose();
     _searchFocusNode.dispose();
     super.dispose();
   }
@@ -1031,9 +1034,9 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
             ];
     }
 
-    return MornyeSettingsTheme(
-      child: CustomScrollView(
-        slivers: [
+    final scrollView = CustomScrollView(
+      controller: Platform.isIOS ? _settingsScroll : null,
+      slivers: [
           if (widget.asPage)
             AppSliverHeader.page(title: context.l10n.settingsTitle)
           else
@@ -1115,8 +1118,15 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
           ...body,
           const NavBarSliverSpacer(),
           const SliverFillRemaining(hasScrollBody: false, child: SizedBox()),
-        ],
-      ),
+      ],
+    );
+    return MornyeSettingsTheme(
+      child: Platform.isIOS
+          ? IosStatusBarScrollTarget(
+              controller: _settingsScroll,
+              child: scrollView,
+            )
+          : scrollView,
     );
   }
 }

@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart' show compute, visibleForTesting;
+import 'package:flutter/services.dart' show MethodChannel;
 import 'package:flutter/widgets.dart'
     show AppLifecycleState, WidgetsBinding, WidgetsBindingObserver;
 import 'package:mornye/services/playback_notification.dart';
@@ -175,6 +176,13 @@ class MusicPlayerHandler extends BaseAudioHandler
   int _playRequestGeneration = 0;
   int _queueGeneration = 0;
   int _playbackInstance = 0;
+  int _artworkWarmRevision = 0;
+  int _artworkRequestRevision = 0;
+  bool _iosArtworkBackgrounded = false;
+  Future<void>? _iosSessionFlush;
+  bool _iosSessionFlushRequested = false;
+  Future<void> _modeWriteTail = Future<void>.value();
+  ({bool shuffle, String repeatMode})? _savedPlaybackModes;
   final _metadataChanges = <String, Object>{};
   String? _activeResolvedPath;
   bool _disposed = false;
@@ -395,14 +403,77 @@ class MusicPlayerHandler extends BaseAudioHandler
     }
   }
 
-  MediaItem _toMediaItem(PlayableMedia media, {String? resolvedSource}) =>
-      media.toMediaItem(
-        resolvedSource: resolvedSource,
-        unknownTitle: _runtime.unknownTitle,
-        unknownArtist: _runtime.unknownArtist,
-        covers: _dependencies.coverStore,
-        playbackInstance: _playbackInstance,
-      );
+  bool _preparesPlaybackArtwork(PlayableMedia media) =>
+      _dependencies.isIOS && PlaybackArtworkCache.supports(media.source);
+
+  MediaItem _toMediaItem(
+    PlayableMedia media, {
+    String? resolvedSource,
+    bool currentTrack = false,
+  }) {
+    final prepares = _preparesPlaybackArtwork(media);
+    final ready = !prepares
+        ? null
+        : _iosArtworkBackgrounded
+        ? PlaybackArtworkCache.readyFilePath(media.source)
+        : PlaybackArtworkCache.readyPath(media.source);
+    final thumbnail = currentTrack && prepares && ready == null &&
+            !_iosArtworkBackgrounded
+        ? SongListArtworkCache.verifiedThumbnailPath(media.source)
+        : null;
+    final item = media.toMediaItem(
+      resolvedSource: resolvedSource,
+      resolvedArtwork: ready == null ? null : Uri.file(ready).toString(),
+      unknownTitle: _runtime.unknownTitle,
+      unknownArtist: _runtime.unknownArtist,
+      covers: _dependencies.coverStore,
+      playbackInstance: _playbackInstance,
+      suppressArtwork: ready == null &&
+          DownloadedEmbeddedCoverResolver.isLocalFlac(media.source),
+    );
+    return prepares
+        ? item.copyWith(extras: {
+            ...?item.extras,
+            'embeddedArtworkPending': ready == null,
+            if (thumbnail != null) 'embeddedArtworkPreview': Uri.file(thumbnail).toString(),
+          })
+        : item;
+  }
+
+  /// Start work before transport publishes a new song. Warm nearest tracks
+  /// first in both directions; never await artwork in the audio start path.
+  void _warmPlaybackArtwork() {
+    if (!_dependencies.isIOS || _disposed || _index < 0 ||
+        _index >= _media.length) {
+      return;
+    }
+    final revision = ++_artworkWarmRevision;
+    final center = _index;
+    final paths = <String>{};
+    void add(int index) {
+      if (index >= 0 && index < _media.length) {
+        final media = _media[index];
+        if (_preparesPlaybackArtwork(media)) paths.add(media.source);
+      }
+    }
+    add(center);
+    final ahead = PlaybackArtworkCache.lookAhead;
+    for (var offset = 1; offset <= ahead; offset++) {
+      add(center + offset);
+      if (offset <= 3) add(center - offset);
+    }
+    unawaited(() async {
+      final ordered = paths.toList(growable: false);
+      for (var i = 0; i < ordered.length; i += 2) {
+        if (_disposed || revision != _artworkWarmRevision) return;
+        await Future.wait(ordered.skip(i).take(2).map(
+          (source) => _iosArtworkBackgrounded
+              ? PlaybackArtworkCache.prepareFile(source)
+              : PlaybackArtworkCache.prepare(source),
+        ));
+      }
+    }());
+  }
 
   void _init() {
     if (_initialized) return;
@@ -514,12 +585,31 @@ class MusicPlayerHandler extends BaseAudioHandler
   }
 
   @override
+  void didHaveMemoryPressure() {
+    _artworkWarmRevision++;
+    PlaybackArtworkCache.clearDecoded();
+  }
+
+  @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_dependencies.isIOS) {
+      final backgrounded = state != AppLifecycleState.resumed;
+      if (backgrounded != _iosArtworkBackgrounded) {
+        _iosArtworkBackgrounded = backgrounded;
+        if (!backgrounded) PlaybackArtworkCache.clearDecoded();
+        _warmPlaybackArtwork();
+        if (_index >= 0 && _index < _media.length &&
+            _preparesPlaybackArtwork(_media[_index])) {
+          unawaited(_recoverEmbeddedArtwork(_media[_index], _playRequestGeneration));
+        }
+      }
+    }
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
       unawaited(_runtime.personalization.flush());
       unawaited(_runtime.taste.flush());
       unawaited(_runtime.ranker.flush());
+      if (_dependencies.isIOS) unawaited(_flushIosSessionBeforeSuspension());
     }
     if (state == AppLifecycleState.resumed ||
         state == AppLifecycleState.inactive ||
@@ -695,6 +785,13 @@ class MusicPlayerHandler extends BaseAudioHandler
               (state == PlaybackDeckState.stopped ||
                   state == PlaybackDeckState.completed ||
                   state == PlaybackDeckState.disposed)) {
+            return;
+          }
+          if (state == PlaybackDeckState.completed && _dependencies.isIOS &&
+              !_shouldIgnoreComplete && _hasFollowingTrack) {
+            // The deck completed, not the media session. Keep transport
+            // active while the following source is prepared.
+            _broadcastState(playerState: PlaybackDeckState.playing, loading: true);
             return;
           }
           if (state == PlaybackDeckState.completed && _shouldIgnoreComplete) {
@@ -958,6 +1055,10 @@ class MusicPlayerHandler extends BaseAudioHandler
       _log.w('Could not monitor headphone connections: $error');
     }
   }
+
+  bool get _hasFollowingTrack =>
+      !_sleepAtEndOfSong && _index >= 0 && _media.isNotEmpty &&
+      (_index + 1 < _media.length || _repeatMode != AudioServiceRepeatMode.none);
 
   bool get _shouldIgnoreComplete =>
       _switchingGeneration != 0 ||
@@ -1555,7 +1656,10 @@ class MusicPlayerHandler extends BaseAudioHandler
 
   Future<void> _cleanupPendingResolvedPaths() => _sourceCache.releaseUnpinned();
 
-  void _markSessionQueueChanged() => _sessionWriter.queueChanged();
+  void _markSessionQueueChanged() {
+    _sessionWriter.queueChanged();
+    _warmPlaybackArtwork();
+  }
 
   PlaybackSessionQueue _sessionQueue() {
     final media = List.of(_media);
@@ -1664,7 +1768,10 @@ class MusicPlayerHandler extends BaseAudioHandler
   Future<void> _persistSession({Duration? position}) {
     if (_restoringSession) return Future<void>.value();
     if (_media.isEmpty || _index < 0 || _index >= _media.length) {
-      return _sessionWriter.clear();
+      // Startup interruption/pause may run before the persisted queue is
+      // loaded. A save without a live item must never erase that queue.
+      // Explicit stop and source deletion own session clearing.
+      return Future<void>.value();
     }
     return _sessionWriter.persist(
       queue: _sessionQueue,
@@ -1679,7 +1786,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     // During restore/source preparation the engine may report a stale zero (or
     // the previous source). The broadcast position already represents the
     // intended start point for the current queue item.
-    if (!_sourceReady) return playbackState.value.position;
+    if (!_sourceReady) return _pendingRestorePosition ?? playbackState.value.position;
     try {
       final position = await _player.getCurrentPosition();
       if (position != null) return position;
@@ -1687,12 +1794,96 @@ class MusicPlayerHandler extends BaseAudioHandler
     return playbackState.value.position;
   }
 
+  /// Hold a short native background assertion while committing the session.
+  /// Start the save immediately, not after the native acknowledgement.
+  Future<void> _flushIosSessionBeforeSuspension() {
+    _iosSessionFlushRequested = true;
+    return _iosSessionFlush ??= _runIosSessionFlush().whenComplete(() {
+      _iosSessionFlush = null;
+      if (_iosSessionFlushRequested && !_disposed) {
+        unawaited(_flushIosSessionBeforeSuspension());
+      }
+    });
+  }
+
+  Future<void> _runIosSessionFlush() async {
+    const kind = 'playback-session';
+    final lease = () async {
+      try {
+        return await PlatformBridge.startBackgroundWork(
+          kind, title: 'Saving playback',
+        ).timeout(const Duration(seconds: 2));
+      } catch (_) {
+        return false;
+      }
+    }();
+    try {
+      do {
+        _iosSessionFlushRequested = false;
+        await persistCurrentSession();
+        await _sessionWriter.flush();
+        await _modeWriteTail;
+      } while (_iosSessionFlushRequested && !_disposed);
+    } catch (error) {
+      _log.w('Could not flush iOS playback session: $error');
+    } finally {
+      if (await lease) {
+        try {
+          await PlatformBridge.stopBackgroundWork(kind);
+        } catch (_) {}
+      }
+    }
+  }
+
+  /// User preferences survive even an empty playback queue.
+  Future<void> restorePlaybackModes() async {
+    if (!_dependencies.isIOS || _index >= 0) return;
+    try {
+      final modes = await _dependencies.sessionDatabase.getPlaybackModes();
+      if (_disposed || _index >= 0 || modes == null) return;
+      _savedPlaybackModes = modes;
+      _shuffle = modes.shuffle;
+      _repeatMode = AudioServiceRepeatMode.values.firstWhere(
+        (mode) => mode.name == modes.repeatMode,
+        orElse: () => AudioServiceRepeatMode.none,
+      );
+      _broadcastState();
+    } catch (error) {
+      _log.w('Could not read playback modes: $error');
+    }
+  }
+
+  Future<void> _persistPlaybackModes() {
+    if (!_dependencies.isIOS) return Future<void>.value();
+    final modes = (shuffle: _shuffle, repeatMode: _repeatMode.name);
+    _savedPlaybackModes = modes;
+    return _modeWriteTail = _modeWriteTail.then((_) async {
+      try {
+        await _dependencies.sessionDatabase.savePlaybackModes(
+          shuffle: modes.shuffle, repeatMode: modes.repeatMode,
+        );
+      } catch (error) {
+        _log.w('Could not save playback modes: $error');
+      }
+    });
+  }
+
   /// Flushes the live engine position and every older queued session write.
   /// Called when the app leaves the foreground so a normal restart resumes at
   /// the latest audible point rather than the beginning of the track.
   Future<void> persistCurrentSession() async {
-    if (_media.isEmpty || _index < 0 || _index >= _media.length) return;
+    if (_disposed || _media.isEmpty || _index < 0 || _index >= _media.length ||
+        _switchingGeneration != 0) {
+      return;
+    }
+    final generation = _playRequestGeneration;
+    final revision = _sessionQueueRevision;
+    final index = _index;
     final position = await _currentPositionForPersist();
+    if (_disposed || generation != _playRequestGeneration ||
+        revision != _sessionQueueRevision || index != _index) {
+      return;
+    }
     _lastPeriodicPersistAt = DateTime.now();
     await _persistSession(position: position);
   }
@@ -1715,8 +1906,14 @@ class MusicPlayerHandler extends BaseAudioHandler
     if (items.any(
       (item) => item.coverReference != null || CoverStore.fetches(item.source),
     )) {
-      await _dependencies.coverStore.warmUp();
-      if (_disposed) return;
+      if (_dependencies.isIOS) {
+        unawaited(_dependencies.coverStore.warmUp().catchError((Object error) {
+          _log.w('Could not warm restored covers: $error');
+        }));
+      } else {
+        await _dependencies.coverStore.warmUp();
+        if (_disposed) return;
+      }
     }
     // Never clobber a session the user already started this launch.
     if (_index >= 0 || (_media.isNotEmpty && !replaceStoppedQueue)) return;
@@ -1740,25 +1937,52 @@ class MusicPlayerHandler extends BaseAudioHandler
         _originalQueueOrder = order.map((i) => _queueItems[i]).toList();
       }
       _repeatMode = repeatMode;
-      _pendingRestorePosition = position > Duration.zero ? position : null;
+      // Apply the saved global modes to the restored order synchronously.
+      // Never turn the shuffle flag off while leaving a shuffled queue.
+      final modes = _savedPlaybackModes;
+      var modesChanged = false;
+      if (_dependencies.isIOS && modes != null && !replaceStoppedQueue) {
+        if (modes.shuffle != _shuffle) {
+          _shuffle = modes.shuffle;
+          if (_shuffle) {
+            _shuffleQueue();
+          } else {
+            final original = _originalQueueOrder;
+            if (original != null) _applyQueueOrder(List.of(original));
+            _originalQueueOrder = null;
+          }
+          modesChanged = true;
+        }
+        final savedRepeat = AudioServiceRepeatMode.values.firstWhere(
+          (mode) => mode.name == modes.repeatMode,
+          orElse: () => AudioServiceRepeatMode.none,
+        );
+        if (savedRepeat != _repeatMode) {
+          _repeatMode = savedRepeat;
+          modesChanged = true;
+        }
+      }
+      queueNeedsRewrite = queueNeedsRewrite || modesChanged;
+      _pendingRestorePosition = position;
+      _userPaused = true;
       _sourceReady = false;
       _lastPeriodicPersistAt = null;
       _sessionWriter.queueRestored(needsRewrite: queueNeedsRewrite);
       queue.add(List<MediaItem>.unmodifiable(_queueItems));
-      mediaItem.add(_toMediaItem(_media[_index]));
+      mediaItem.add(_toMediaItem(_media[_index], currentTrack: true));
+      _warmPlaybackArtwork();
       _covers.fetchFor(_media[_index]);
-      if (position > Duration.zero) {
-        playbackState.add(
-          playbackState.value.copyWith(updatePosition: position),
-        );
-      }
       _broadcastState(playerState: PlaybackDeckState.paused);
+      _broadcastPosition(position, force: true);
     } finally {
       _restoringSession = false;
     }
+    // Capture the modes before yielding to other user transport commands.
+    final modesSaved = _persistPlaybackModes();
     if (queueNeedsRewrite) {
       await _persistSession(position: position);
     }
+    if (_dependencies.isIOS) await modesSaved;
     _autoplay.updateMode();
   }
 
@@ -1806,7 +2030,10 @@ class MusicPlayerHandler extends BaseAudioHandler
     _index = initialIndex.clamp(0, items.length - 1);
     // An explicit mode accompanies a queue already in play order, as when
     // playback moves between devices. Adopt it without shuffling a second time.
-    if (shuffle != null) _shuffle = shuffle;
+    if (shuffle != null) {
+      _shuffle = shuffle;
+      if (_dependencies.isIOS) unawaited(_persistPlaybackModes());
+    }
     if (_shuffle && shuffle == null) _shuffleQueue();
     _markSessionQueueChanged();
     _playHistory.clear();
@@ -2012,6 +2239,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     // Advance the requested index synchronously so consecutive Next taps do
     // not all target the same song while AutoMix/source preparation awaits.
     _index = index;
+    _warmPlaybackArtwork();
     unawaited(_autoplay.fill());
     final media = _media[index];
     _switchingGeneration = generation;
@@ -2191,10 +2419,13 @@ class MusicPlayerHandler extends BaseAudioHandler
     );
     _runtime.personalization.begin(_learningTrack(media));
     _playbackInstance++;
-    mediaItem.add(_toMediaItem(media));
+    mediaItem.add(_toMediaItem(media, currentTrack: true));
     _lastBroadcastPosition = Duration.zero;
     _lastPositionBroadcastAt = null;
+    _pendingRestorePosition = effectiveStartPosition;
     _broadcastPosition(effectiveStartPosition, force: true);
+    // Preserve the new selection even if source preparation or focus fails.
+    unawaited(_persistSession(position: effectiveStartPosition));
     // Claim the playing state up front (while the app is still in the
     // foreground window) so audio_service can start its foreground service
     // before the async source resolve below.
@@ -2230,7 +2461,7 @@ class MusicPlayerHandler extends BaseAudioHandler
         if (recovered != null && recovered != media.source) {
           _relocateQueuedSource(media.source, recovered);
           media = _media[_index];
-          mediaItem.add(_toMediaItem(media));
+          mediaItem.add(_toMediaItem(media, currentTrack: true));
         }
       } catch (error) {
         _log.w('Could not resolve a moved download: $error');
@@ -2381,7 +2612,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       // the same metadata twice on every Next. SAF needs this second event so
       // the UI can inspect its temporary local copy.
       if (usingLocalSafCopy) {
-        mediaItem.add(_toMediaItem(_media[_index], resolvedSource: resolved));
+        mediaItem.add(_toMediaItem(_media[_index], resolvedSource: resolved, currentTrack: true));
       }
       _broadcastPosition(effectiveStartPosition, force: true);
       // A source held paused is ready to play, whatever the deck reports.
@@ -2390,6 +2621,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       );
       _lastPeriodicPersistAt = DateTime.now();
       unawaited(_persistSession(position: effectiveStartPosition));
+      unawaited(_refreshIosControlsAfterTransition());
       // Some files do not emit onDurationChanged reliably (stuck at 0:00);
       // poll the engine for the real duration as a fallback.
       unawaited(_ensureDurationKnown(media, generation));
@@ -2442,6 +2674,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     PlayableMedia media,
     int generation,
   ) async {
+    final artworkRevision = ++_artworkRequestRevision;
     if (_runtime.arrivingFile(media.source) case final arriving?) {
       try {
         await arriving.done;
@@ -2450,16 +2683,39 @@ class MusicPlayerHandler extends BaseAudioHandler
       }
       if (!_isCurrentPlayRequest(generation, media)) return;
     }
+    final prepares = _preparesPlaybackArtwork(media);
     final artwork = await resolveEmbeddedArtworkUri(
       media.source,
       media.artUri,
-      extract: (source) =>
-          DownloadedEmbeddedCoverResolver.resolveOrExtract(source),
+      extract: (source) => prepares
+          ? (_iosArtworkBackgrounded
+              ? PlaybackArtworkCache.prepareFile(source)
+              : PlaybackArtworkCache.prepare(source))
+          : DownloadedEmbeddedCoverResolver.resolveOrExtract(
+              source,
+              requireFreshExtraction: true,
+            ),
     );
-    if (artwork == null || !_isCurrentPlayRequest(generation, media)) return;
+    if (artworkRevision != _artworkRequestRevision ||
+        !_isCurrentPlayRequest(generation, media)) {
+      return;
+    }
+    if (artwork == null && !prepares) return;
     final current = mediaItem.value;
-    if (current == null) return;
-    final updated = current.copyWith(artUri: Uri.parse(artwork));
+    if (current == null || current.extras?['source'] != media.source) return;
+    final uri = artwork == null ? null : Uri.parse(artwork);
+    if (current.artUri == uri &&
+        current.extras?['embeddedArtworkPending'] != true) {
+      return;
+    }
+    final updated = current.copyWith(
+      artUri: uri,
+      extras: {
+        ...?current.extras,
+        if (prepares) 'embeddedArtworkPending': false,
+        if (prepares) 'embeddedArtworkPreview': null,
+      },
+    );
     mediaItem.add(updated);
     _media[_index] = PlayableMedia.fromJson({
       ..._media[_index].toJson(),
@@ -2597,24 +2853,68 @@ class MusicPlayerHandler extends BaseAudioHandler
     }
   }
 
+  // Capture the native task's generation before the asynchronous handoff.
+  // An old acknowledgement cannot close a newer completion's task.
+  static const _transitionChannel = MethodChannel('xyz.luan/audioplayers.global');
+
+  Future<int?> _transitionTicket() async {
+    if (!_dependencies.isIOS) return null;
+    try {
+      return await _transitionChannel.invokeMethod<int>(
+        'musicTransitionTicket', <String, Object?>{},
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _finishTransition(Future<int?> ticket) async {
+    final token = await ticket;
+    if (token == null) return;
+    try {
+      await _transitionChannel.invokeMethod<void>('finishMusicTransition', {'token': token});
+    } catch (_) {
+      // Native expiry and the short deadline independently release the task.
+    }
+  }
+
+  Future<void> _refreshIosControlsAfterTransition() async {
+    if (!_dependencies.isIOS || _disposed || _userPaused || _interruptionActive ||
+        !playbackState.value.playing || mediaItem.value == null) {
+      return;
+    }
+    try {
+      await AudioService.refreshNowPlayingInfo();
+    } catch (error) {
+      _log.w('Could not publish iOS controls after transition: $error');
+    }
+  }
+
   Future<void> _handlePlayerComplete() async {
     if (_completing) return;
+    final ticket = _transitionTicket();
     if (_shouldIgnoreComplete) {
       // A natively chained next song must not keep playing unseen.
       unawaited(_gapless.cancel());
       if (_userPaused || _interruptionActive) {
         _broadcastState(playerState: PlaybackDeckState.paused);
       }
+      unawaited(_finishTransition(ticket));
       return;
     }
 
     _completing = true;
     try {
+      final generation = _playRequestGeneration;
       _runtime.personalization.finish();
       if (await _gapless.handoff()) return;
+      if (_disposed || generation != _playRequestGeneration || _shouldIgnoreComplete) {
+        return;
+      }
       await _onComplete();
     } finally {
       _completing = false;
+      unawaited(_finishTransition(ticket));
     }
   }
 
@@ -2784,8 +3084,11 @@ class MusicPlayerHandler extends BaseAudioHandler
       if (generation != _playRequestGeneration || _disposed) return;
       await _player.pause();
       if (generation != _playRequestGeneration || _disposed) return;
+      final position = await _currentPositionForPersist();
+      if (generation != _playRequestGeneration || _disposed) return;
       _broadcastState(playerState: PlaybackDeckState.paused);
-      await _persistSession(position: await _currentPositionForPersist());
+      _broadcastPosition(position, force: true);
+      await _persistSession(position: position);
     });
   }
 
@@ -2806,6 +3109,18 @@ class MusicPlayerHandler extends BaseAudioHandler
       await _player.seek(position);
       if (generation != _playRequestGeneration || _disposed) return;
       _broadcastPosition(position, force: true);
+      // iOS may suspend or terminate a paused app immediately after a seek.
+      // Save that exact position before returning, but never hold the active
+      // transport behind storage I/O (including gapless and AutoMix ticks).
+      // Other platforms retain their existing periodic/paused saves.
+      if (_dependencies.isIOS) {
+        final save = _persistSession(position: position);
+        if (playbackState.value.playing) {
+          unawaited(save);
+        } else {
+          await save;
+        }
+      }
     });
   }
 
@@ -2830,9 +3145,16 @@ class MusicPlayerHandler extends BaseAudioHandler
     _markSessionQueueChanged();
     queue.add(List<MediaItem>.unmodifiable(_queueItems));
     _broadcastState();
+    final modesSaved = _persistPlaybackModes();
     if (_media.isNotEmpty && _index >= 0) {
-      unawaited(_persistSession(position: playbackState.value.position));
+      final saved = _persistSession(position: playbackState.value.position);
+      if (_dependencies.isIOS) {
+        await saved;
+      } else {
+        unawaited(saved);
+      }
     }
+    if (_dependencies.isIOS) await modesSaved;
   }
 
   @override
@@ -2844,9 +3166,16 @@ class MusicPlayerHandler extends BaseAudioHandler
         : repeatMode;
     _autoplay.updateMode();
     _broadcastState();
+    final modesSaved = _persistPlaybackModes();
     if (_media.isNotEmpty && _index >= 0) {
-      unawaited(_persistSession(position: playbackState.value.position));
+      final saved = _persistSession(position: playbackState.value.position);
+      if (_dependencies.isIOS) {
+        await saved;
+      } else {
+        unawaited(saved);
+      }
     }
+    if (_dependencies.isIOS) await modesSaved;
   }
 
   /// The system stops without arguments, as when the playback notification
@@ -3067,6 +3396,10 @@ class MusicPlayerHandler extends BaseAudioHandler
     // old tags, lyrics too, from that copy again.
     await _retireTaggedCopies(source);
     if (_disposed || !_media.any((item) => item.source == source)) return;
+    PlaybackArtworkCache.invalidate(source);
+    if (_index >= 0 && _index < _media.length && _media[_index].source == source) {
+      _artworkRequestRevision++;
+    }
     final token = Object();
     _metadataChanges[source] = token;
     try {
@@ -3147,6 +3480,10 @@ class MusicPlayerHandler extends BaseAudioHandler
         _markSessionQueueChanged();
         queue.add(List.unmodifiable(_queueItems));
         await _persistSession(position: playbackState.value.position);
+        if (_index >= 0 && _index < _media.length &&
+            _media[_index].source == source && _preparesPlaybackArtwork(_media[_index])) {
+          unawaited(_recoverEmbeddedArtwork(_media[_index], _playRequestGeneration));
+        }
       }
     } finally {
       if (identical(_metadataChanges[source], token)) {
@@ -3292,6 +3629,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     _autoplay.reset();
     _prefetch.stop();
     _disposed = true;
+    _artworkWarmRevision++;
     playbackSpeed.removeListener(_tempoChanged);
     playbackTempoSupportRevision.removeListener(_tempoChanged);
     usbAudioStatus.removeListener(refreshPlaybackOutput);

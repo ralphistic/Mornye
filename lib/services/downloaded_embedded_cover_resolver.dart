@@ -2,13 +2,19 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data' as typed;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:mornye/services/native_file_hash.dart';
+import 'package:crypto/crypto.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/utils/file_access.dart';
+import 'package:mornye/utils/playback_artwork.dart';
+
+part 'downloaded_embedded_cover_resolver_song_rows.dart';
+part 'downloaded_embedded_cover_resolver_playback.dart';
 
 class _EmbeddedCoverCacheEntry {
   final String previewPath;
@@ -73,9 +79,10 @@ class DownloadedEmbeddedCoverResolver {
   static const int _maxConcurrentExtractions = 2;
   static const int _maxQueuedBackgroundExtractions = 24;
   static const String _persistentCacheDirectoryName = 'embedded_cover_previews';
-  // v1 SAF previews could contain the Library's 800px thumbnail instead of
-  // original embedded artwork. Re-extract even when the audio has not changed.
-  static const String _persistentCacheVersion = 'v3';
+  // v1 SAF previews could contain the Library's 800px thumbnail. v2
+  // previews may also preserve artwork from before a FLAC tag edit when the
+  // file timestamp was retained. Re-extract once after this upgrade.
+  static const String _persistentCacheVersion = 'v4';
   static const int _maxPersistentCacheEntries = 384;
   static const int _maxPersistentCacheBytes = 160 << 20;
   static const int _persistentCacheSweepTargetBytes = 128 << 20;
@@ -100,6 +107,12 @@ class DownloadedEmbeddedCoverResolver {
   static const _maxPendingPreviewValidations = 64;
   static DateTime Function() _validationClock = DateTime.now;
   static final _failedExtract = <String, DateTime>{};
+  static final Set<String> _confirmedWithoutEmbeddedCover = <String>{};
+
+  /// True only after the backend explicitly reports that the file has no
+  /// embedded picture. Transient extraction errors do not qualify.
+  static bool hasNoEmbeddedCover(String? path) =>
+      _confirmedWithoutEmbeddedCover.contains(cleanFilePath(path));
   static const _failureRetryDelay = Duration(seconds: 30);
 
   static Directory? _persistentCacheDirectoryOverride;
@@ -114,6 +127,28 @@ class DownloadedEmbeddedCoverResolver {
       return filePath.substring(7);
     }
     return filePath;
+  }
+
+  /// Only local FLAC files can supply embedded artwork. Network references
+  /// may end in .flac but must keep their provider artwork instead.
+  static bool isLocalFlac(String? filePath) {
+    final path = cleanFilePath(filePath);
+    return isLocalFlacArtworkSource(path);
+  }
+
+  /// Single display policy for a local FLAC: its embedded picture wins over
+  /// provider artwork and scan thumbnails. While extraction is pending, show
+  /// no substitute image; a stale fallback would misrepresent the file.
+  /// Other audio formats keep their normal artwork source.
+  static String? resolveDisplayCover(
+    String? filePath, {
+    String? fallback,
+    VoidCallback? onChanged,
+  }) {
+    if (!isLocalFlac(filePath)) return fallback;
+    final embedded = resolve(filePath, onChanged: onChanged);
+    if (embedded != null) return embedded;
+    return hasNoEmbeddedCover(filePath) ? fallback : null;
   }
 
   /// Whether [filePath] names a song on this device to read artwork from:
@@ -184,16 +219,31 @@ class DownloadedEmbeddedCoverResolver {
   static Future<String?> resolveOrExtract(
     String? filePath, {
     VoidCallback? onChanged,
+    bool requireFreshExtraction = false,
+    bool isForeground = true,
   }) async {
     final cleanPath = cleanFilePath(filePath);
     if (cleanPath.isEmpty) return null;
+
+    // Playback must read the embedded picture itself. A source can be retagged
+    // while preserving its modification time, so timestamp-based preview
+    // validation alone cannot prove an in-memory image is still current.
+    if (requireFreshExtraction) {
+      _pendingRefresh.remove(cleanPath);
+      return _ensureCover(
+        cleanPath,
+        forceRefresh: true,
+        onChanged: onChanged,
+        isForeground: isForeground,
+      );
+    }
 
     if (_pendingRefresh.remove(cleanPath)) {
       return _ensureCover(
         cleanPath,
         forceRefresh: true,
         onChanged: onChanged,
-        isForeground: true,
+        isForeground: isForeground,
       );
     }
 
@@ -204,7 +254,7 @@ class DownloadedEmbeddedCoverResolver {
       return cached.previewPath;
     }
 
-    return _ensureCover(cleanPath, onChanged: onChanged, isForeground: true);
+    return _ensureCover(cleanPath, onChanged: onChanged, isForeground: isForeground);
   }
 
   /// Whether [previewPath] belongs to this resolver. Persistent previews stay
@@ -236,7 +286,10 @@ class DownloadedEmbeddedCoverResolver {
     }
 
     _pendingRefresh.add(cleanPath);
+    PlaybackArtworkCache.invalidate(cleanPath);
+    await SongListArtworkCache._invalidate(cleanPath);
     _failedExtract.remove(cleanPath);
+    _confirmedWithoutEmbeddedCover.remove(cleanPath);
     onChanged?.call();
   }
 
@@ -244,6 +297,8 @@ class DownloadedEmbeddedCoverResolver {
     final cleanPath = cleanFilePath(filePath);
     if (cleanPath.isEmpty) return;
 
+    PlaybackArtworkCache.invalidate(cleanPath);
+    final rowInvalidation = SongListArtworkCache._invalidate(cleanPath);
     _cacheGeneration[cleanPath] = (_cacheGeneration[cleanPath] ?? 0) + 1;
     final cached = _cache.remove(cleanPath);
     _cancelPendingExtraction(cleanPath);
@@ -251,10 +306,12 @@ class DownloadedEmbeddedCoverResolver {
     _pendingRefresh.remove(cleanPath);
     _pendingPreviewValidation.remove(cleanPath);
     _failedExtract.remove(cleanPath);
+    _confirmedWithoutEmbeddedCover.remove(cleanPath);
     if (cached != null) {
       await _cleanupCacheEntry(cached);
     }
     await _deletePersistentVariantsForSource(cleanPath);
+    await rowInvalidation;
   }
 
   /// Fires once previews were deleted from outside a song's own refresh, as
@@ -270,31 +327,46 @@ class DownloadedEmbeddedCoverResolver {
   static void announcePreviewsCleared() => _previewsCleared.fire();
 
   /// Clears resolver state together with its App Cache-backed disk entries.
+  /// A forced library scan may retain content-verified FLAC previews; manual
+  /// cache clearing still deletes every preview by default.
   /// Running native work is generation-cancelled and awaited before the disk
   /// directory is wiped, so a completed clear leaves no late staging output.
   /// Follow it with [announcePreviewsCleared].
-  static Future<void> clearPersistentCache() async {
-    final keys = <String>{..._cache.keys, ..._pendingExtract.keys};
-    for (final key in keys) {
-      _cacheGeneration[key] = (_cacheGeneration[key] ?? 0) + 1;
-      _cancelPendingExtraction(key);
-      _cacheGeneration.remove(key);
-    }
-    while (_activeExtractions > 0) {
-      await Future<void>.delayed(const Duration(milliseconds: 1));
-    }
-    _cacheGeneration.clear();
+  static Future<void> clearPersistentCache({
+    bool preserveVerifiedFlacPreviews = false,
+  }) async {
+    PlaybackArtworkCache._suspend();
+    await SongListArtworkCache._suspend();
+    try {
+      final keys = <String>{..._cache.keys, ..._pendingExtract.keys};
+      for (final key in keys) {
+        _cacheGeneration[key] = (_cacheGeneration[key] ?? 0) + 1;
+        _cancelPendingExtraction(key);
+        _cacheGeneration.remove(key);
+      }
+      while (_activeExtractions > 0) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      _cacheGeneration.clear();
 
-    _cache.clear();
-    _pendingRefresh.clear();
-    _pendingPreviewValidation.clear();
-    await _previewValidationFuture;
-    _failedExtract.clear();
+      _cache.clear();
+      _pendingRefresh.clear();
+      _pendingPreviewValidation.clear();
+      await _previewValidationFuture;
+      _failedExtract.clear();
+      _confirmedWithoutEmbeddedCover.clear();
 
-    final maintenance = _persistentMaintenanceFuture;
-    if (maintenance != null) await maintenance;
-    final directory = await _getPersistentCacheDirectory();
-    await _clearDirectoryContents(directory);
+      final maintenance = _persistentMaintenanceFuture;
+      if (maintenance != null) await maintenance;
+      final directory = await _getPersistentCacheDirectory();
+      await _clearDirectoryContents(
+        directory,
+        preserveVerifiedFlacPreviews: preserveVerifiedFlacPreviews,
+      );
+    } finally {
+      SongListArtworkCache._resume(verifyContent: preserveVerifiedFlacPreviews);
+      PlaybackArtworkCache._resume();
+    }
   }
 
   @visibleForTesting
@@ -302,6 +374,8 @@ class DownloadedEmbeddedCoverResolver {
     if (_activeExtractions != 0 || _pendingExtract.isNotEmpty) {
       throw StateError('Cannot replace persistent cache while work is active');
     }
+    PlaybackArtworkCache.clear();
+    SongListArtworkCache._resetForTesting();
     _persistentCacheDirectoryOverride = directory;
     _persistentCacheRootFuture = null;
     _persistentCacheRootPath = directory == null
@@ -314,6 +388,9 @@ class DownloadedEmbeddedCoverResolver {
   static Future<void> resetMemoryStateForTesting({
     bool preservePersistentFiles = true,
   }) async {
+    PlaybackArtworkCache.clear();
+    await SongListArtworkCache._suspend();
+    SongListArtworkCache._resume(verifyContent: false);
     final maintenance = _persistentMaintenanceFuture;
     if (maintenance != null) await maintenance;
 
@@ -335,6 +412,7 @@ class DownloadedEmbeddedCoverResolver {
     await _previewValidationFuture;
     _validationClock = DateTime.now;
     _failedExtract.clear();
+    _confirmedWithoutEmbeddedCover.clear();
     _cacheGeneration.clear();
     _drainScheduled = false;
 
@@ -379,6 +457,7 @@ class DownloadedEmbeddedCoverResolver {
       _pendingRefresh.remove(oldestKey);
       _pendingPreviewValidation.remove(oldestKey);
       _failedExtract.remove(oldestKey);
+      _confirmedWithoutEmbeddedCover.remove(oldestKey);
     }
   }
 
@@ -503,6 +582,7 @@ class DownloadedEmbeddedCoverResolver {
   static Future<String?> _ensureCover(
     String cleanPath, {
     bool forceRefresh = false,
+    bool verifyExistingFlac = false,
     int? knownModTime,
     VoidCallback? onChanged,
     bool isForeground = false,
@@ -523,10 +603,10 @@ class DownloadedEmbeddedCoverResolver {
     }
 
     final cached = _cache[cleanPath];
-    if (!forceRefresh && cached != null) {
+    if (!forceRefresh && !verifyExistingFlac && cached != null) {
       return Future<String?>.value(cached.previewPath);
     }
-    if (!forceRefresh && _failedExtract.containsKey(cleanPath)) {
+    if (!forceRefresh && !verifyExistingFlac && _failedExtract.containsKey(cleanPath)) {
       // A SAF provider may temporarily be offline or still opening its remote
       // file. Do not turn that failure into "no artwork" for the whole session.
       // Retry on demand, with a cooldown so scrolling cannot flood the NAS.
@@ -645,23 +725,40 @@ class DownloadedEmbeddedCoverResolver {
         directory.path,
         _persistentFileName(cleanPath, modTime),
       );
-      // Without a timestamp a disk copy cannot be validated: it is extracted
-      // again once per memory miss and named by its content below.
-      if (modTime != null &&
+      // Local native FLAC artwork can be verified without decoding the image:
+      // hash the file's metadata, not its timestamp or the audio frames.
+      // Unreadable or nonstandard files keep the conservative extraction path.
+      final isFlac = isLocalFlac(cleanPath);
+      final fingerprint = isFlac
+          ? await _nativeFlacMetadataFingerprint(cleanPath)
+          : null;
+      if (!_isCurrentExtraction(job)) return null;
+      final verifiedPath = fingerprint == null
+          ? null
+          : p.join(
+              directory.path,
+              _persistentFileName(cleanPath, null, content: 'f1_$fingerprint'),
+            );
+      final reusablePath = isFlac
+          ? verifiedPath
+          : (modTime == null ? null : persistentPath);
+      if (reusablePath != null &&
           !job.forceRefresh &&
-          await _isReusablePersistentPreview(persistentPath, cleanPath)) {
+          await _isReusablePersistentPreview(reusablePath, cleanPath)) {
         if (!_isCurrentExtraction(job)) return null;
-        await _touchPersistentPreview(persistentPath);
+        await _touchPersistentPreview(reusablePath);
+        if (!_isCurrentExtraction(job)) return null;
         final next = _EmbeddedCoverCacheEntry(
-          previewPath: persistentPath,
+          previewPath: reusablePath,
           sourceModTimeMillis: modTime,
         );
         _touch(cleanPath, next);
         _failedExtract.remove(cleanPath);
+        _confirmedWithoutEmbeddedCover.remove(cleanPath);
         _trimCacheIfNeeded();
         _notifyCoverChanged(job);
-        _schedulePersistentMaintenance();
-        return persistentPath;
+        // A cache hit adds no bytes, so do not sweep the entire disk cache.
+        return reusablePath;
       }
 
       outputPath = p.join(
@@ -687,6 +784,15 @@ class DownloadedEmbeddedCoverResolver {
           await outputFile.exists() &&
           await outputFile.length() > 0;
       if (!hasCover) {
+        final explicitNoCover =
+            result['error']?.toString().contains(
+              'no cover art found in file',
+            ) ??
+            false;
+        if (explicitNoCover) {
+          _confirmedWithoutEmbeddedCover.add(cleanPath);
+          _notifyCoverChanged(job);
+        }
         _rememberFailedExtract(cleanPath);
         if (job.forceRefresh) {
           final previous = _cache.remove(cleanPath);
@@ -705,16 +811,28 @@ class DownloadedEmbeddedCoverResolver {
 
       // An unchanged cover keeps its path; an edited one gets a new path, so
       // no decoded image of the old cover is shown for it.
-      final targetPath = modTime != null
-          ? persistentPath
-          : p.join(
-              directory.path,
-              _persistentFileName(
-                cleanPath,
-                null,
-                content: await _contentHash(outputPath),
-              ),
-            );
+      // A retagged FLAC can keep the same modification timestamp. Include
+      // the actual picture digest in its preview filename so Flutter cannot
+      // reuse decoded pixels from the old picture at the same file path.
+      // Never associate a decoded preview with a fingerprint if the source
+      // changed during native extraction. A later request will read it again.
+      if (fingerprint != null &&
+          fingerprint != await _nativeFlacMetadataFingerprint(cleanPath)) {
+        await _cleanupCoverPath(outputPath);
+        if (_isCurrentExtraction(job)) _notifyCoverChanged(job);
+        return null;
+      }
+      final targetPath = verifiedPath ??
+          (modTime != null && !isFlac && !job.forceRefresh
+              ? persistentPath
+              : p.join(
+                  directory.path,
+                  _persistentFileName(
+                    cleanPath,
+                    modTime,
+                    content: await _contentHash(outputPath),
+                  ),
+                ));
       if (!_isCurrentExtraction(job)) {
         await _cleanupCoverPath(outputPath);
         return null;
@@ -738,6 +856,7 @@ class DownloadedEmbeddedCoverResolver {
       );
       _touch(cleanPath, next);
       _failedExtract.remove(cleanPath);
+      _confirmedWithoutEmbeddedCover.remove(cleanPath);
       _trimCacheIfNeeded();
 
       if (previous != null && previous.previewPath != finalPath) {
@@ -794,7 +913,16 @@ class DownloadedEmbeddedCoverResolver {
         final appCache = await getApplicationCacheDirectory();
         return p.join(appCache.path, _persistentCacheDirectoryName);
       }();
-      rootPath = await future;
+      try {
+        rootPath = await future;
+      } catch (_) {
+        // A transient platform/storage failure must not poison every later
+        // artwork request. Only clear the failed lookup we actually awaited.
+        if (identical(_persistentCacheRootFuture, future)) {
+          _persistentCacheRootFuture = null;
+        }
+        rethrow;
+      }
     }
 
     final directory = Directory(rootPath);
@@ -815,8 +943,76 @@ class DownloadedEmbeddedCoverResolver {
         '${content == null ? '' : '_$content'}.jpg';
   }
 
+  /// A native FLAC begins with fLaC and a 34-byte STREAMINFO block. Walk
+  /// the bounded metadata chain, then stream its exact bytes into SHA-256.
+  /// This covers picture and comment blocks even when a tag editor preserves
+  /// the file's length and modification timestamp. Audio frames are not read.
+  /// Unsupported, malformed, oversized or SAF sources fall back to extraction.
+  static Future<String?> _nativeFlacMetadataFingerprint(String path) =>
+      Platform.isIOS
+      ? compute(_fingerprintNativeFlacFile, path)
+      : _fingerprintNativeFlacFile(path);
+
+  // Reading and hashing large embedded pictures can consume multiple
+  // frames. On iOS keep this purely filesystem/CPU work off the UI isolate.
+  static Future<String?> _fingerprintNativeFlacFile(String path) async {
+    if (isContentUri(path)) return null;
+    const maxMetadataBytes = 64 * 1024 * 1024;
+    const maxBlocks = 1024;
+    RandomAccessFile? input;
+    try {
+      final file = File(path);
+      final before = await file.stat();
+      if (before.type != FileSystemEntityType.file) return null;
+      input = await file.open();
+      final marker = await input.read(4);
+      if (marker.length != 4 ||
+          marker[0] != 0x66 ||
+          marker[1] != 0x4c ||
+          marker[2] != 0x61 ||
+          marker[3] != 0x43) {
+        return null;
+      }
+      var offset = 4;
+      for (var block = 0; block < maxBlocks; block++) {
+        final header = await input.read(4);
+        if (header.length != 4) return null;
+        final type = header[0] & 0x7f;
+        final length = (header[1] << 16) | (header[2] << 8) | header[3];
+        if (type == 127 ||
+            (block == 0 && (type != 0 || length != 34)) ||
+            (block != 0 && type == 0)) {
+          return null;
+        }
+        offset += 4 + length;
+        if (offset > maxMetadataBytes || offset > before.size) return null;
+        if ((header[0] & 0x80) != 0) {
+          final digest = await sha256.bind(file.openRead(0, offset)).first;
+          final after = await file.stat();
+          if (after.type != FileSystemEntityType.file ||
+              after.size != before.size ||
+              after.modified != before.modified ||
+              after.changed != before.changed) {
+            return null;
+          }
+          return digest.toString();
+        }
+        await input.setPosition(offset);
+      }
+    } catch (_) {
+      // An unsupported file must not accidentally validate an old preview.
+    } finally {
+      try {
+        await input?.close();
+      } catch (_) {}
+    }
+    return null;
+  }
+
   static Future<String> _contentHash(String path) async {
-    return (await hashFileSha256(path)).substring(0, 16);
+    return (await sha256.bind(File(path).openRead()).first)
+        .toString()
+        .substring(0, 16);
   }
 
   /// Two independently mixed 63-bit FNV-1a lanes keep filenames compact.
@@ -943,7 +1139,8 @@ class DownloadedEmbeddedCoverResolver {
       final name = p.basename(entity.path);
       try {
         final stat = await entity.stat();
-        if (name.startsWith('v1_') && name.endsWith('.jpg')) {
+        if ((name.startsWith('v1_') || name.startsWith('v2_') || name.startsWith('v3_')) &&
+            name.endsWith('.jpg')) {
           await entity.delete();
           await _deleteFileIfPresent(
             File(_persistentSourceSidecarPath(entity.path)),
@@ -1003,12 +1200,14 @@ class DownloadedEmbeddedCoverResolver {
     String cleanPath, {
     String? exceptPath,
   }) async {
-    final directory = await _getPersistentCacheDirectory();
     final prefix = '${_persistentCacheVersion}_${_stablePathHash(cleanPath)}_';
     final normalizedExcept = exceptPath == null
         ? null
         : _normalizedAbsolutePath(exceptPath);
     try {
+      // Directory discovery itself can fail (e.g. protected data, plugin
+      // startup or a test without a platform provider). Cleanup is best effort.
+      final directory = await _getPersistentCacheDirectory();
       await for (final entity in directory.list(followLinks: false)) {
         if (entity is! File) continue;
         final name = p.basename(entity.path);
@@ -1064,13 +1263,25 @@ class DownloadedEmbeddedCoverResolver {
     await deleteFileQuietly(file);
   }
 
-  static Future<void> _clearDirectoryContents(Directory directory) async {
+  static Future<void> _clearDirectoryContents(
+    Directory directory, {
+    bool preserveVerifiedFlacPreviews = false,
+  }) async {
     if (!await directory.exists()) {
       await directory.create(recursive: true);
       return;
     }
     try {
+      final verifiedName = RegExp(
+        r'^v4_[0-9a-f]{32}_0_f1_[0-9a-f]{64}\.jpg(?:\.source)?$',
+      );
       await for (final entity in directory.list(followLinks: false)) {
+        if (preserveVerifiedFlacPreviews &&
+            ((entity is File && verifiedName.hasMatch(p.basename(entity.path))) ||
+                (entity is Directory &&
+                    p.basename(entity.path) == SongListArtworkCache._directoryName))) {
+          continue;
+        }
         try {
           await entity.delete(recursive: true);
         } catch (_) {}

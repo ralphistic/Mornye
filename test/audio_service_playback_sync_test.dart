@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:audio_service/audio_service.dart';
+import 'package:audio_service_platform_interface/audio_service_platform_interface.dart';
+import 'package:audio_service_platform_interface/method_channel_audio_service.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
@@ -16,6 +18,10 @@ void main() {
   test(
     'playback synchronization awaits the native acknowledgement and errors',
     () async {
+      // Linux defaults to NoOpAudioService; use the actual native adapter.
+      final previousPlatform = AudioServicePlatform.instance;
+      AudioServicePlatform.instance = MethodChannelAudioService();
+      addTearDown(() => AudioServicePlatform.instance = previousPlatform);
       const client = MethodChannel(
         'com.ryanheise.audio_service.client.methods',
       );
@@ -26,8 +32,12 @@ void main() {
           TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
       Completer<void>? nativeReply;
       var received = 0;
+      final mediaItems = <Map<dynamic, dynamic>>[];
       messenger.setMockMethodCallHandler(client, (_) async => null);
       messenger.setMockMethodCallHandler(native, (call) async {
+        if (call.method == 'setMediaItem') {
+          mediaItems.add((call.arguments as Map)['mediaItem'] as Map);
+        }
         if (call.method == 'setState') {
           received++;
           await nativeReply?.future;
@@ -108,6 +118,17 @@ void main() {
       );
       await AudioService.synchronizePlaybackState();
       expect(received, 5);
+
+      // The real audio_service forwarding path must deliver each local file
+      // directly to the native media session, without a Flutter image/cache.
+      final first = Uri.file('/covers/First cover.jpg');
+      final second = Uri.file('/covers/Second ? cover.jpg');
+      handler.mediaItem.add(MediaItem(id: 'first', title: 'First', artUri: first));
+      handler.mediaItem.add(MediaItem(id: 'second', title: 'Second', artUri: second));
+      await Future<void>.delayed(Duration.zero);
+      expect(mediaItems.map((item) => item['id']), ['first', 'second']);
+      expect(mediaItems.map((item) => (item['extras'] as Map)['artCacheFile']),
+          [first.toFilePath(), second.toFilePath()]);
     },
   );
 }

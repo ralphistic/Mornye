@@ -34,6 +34,7 @@ import 'package:mornye/screens/queue_tab.dart';
 import 'package:mornye/screens/settings/profile_settings_page.dart';
 import 'package:mornye/screens/settings/settings_tab.dart';
 import 'package:mornye/services/platform_bridge.dart';
+import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
 import 'package:mornye/services/shell_navigation_service.dart';
 import 'package:mornye/services/share_intent_service.dart';
 import 'package:mornye/services/music_playback_deck.dart';
@@ -263,6 +264,9 @@ class _MainShellState extends ConsumerState<MainShell>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (Platform.isIOS) {
+      DownloadedEmbeddedCoverResolver.previewsCleared.addListener(_reprepareSongArtwork);
+    }
     WidgetsBinding.instance.addObserver(_backSwipe);
     usbAudioStatus.addListener(_onUsbAudioStatusChanged);
     _homePreviewStopObserver = _PreviewStopNavigatorObserver(
@@ -298,6 +302,8 @@ class _MainShellState extends ConsumerState<MainShell>
       showRepoTab: false,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Start restoring playback before unrelated permission repair or dialogs.
+      if (Platform.isIOS) unawaited(_restorePlayback());
       // Null when the startup check gave no answer: it is then asked again.
       final safLost = await ref.read(initialSafValidationProvider);
       if (!mounted) return;
@@ -308,7 +314,7 @@ class _MainShellState extends ConsumerState<MainShell>
       _initialSafRepairComplete = true;
       if (!mounted) return;
       unawaited(_pointAtMovedSearch());
-      unawaited(_restorePlayback());
+      if (!Platform.isIOS) unawaited(_restorePlayback());
       // Off the startup path: waits for extensions, then fills the Store
       // badge and installs updates without the Store tab being opened.
       unawaited(
@@ -343,7 +349,12 @@ class _MainShellState extends ConsumerState<MainShell>
   Future<void> _restorePlayback() async {
     final runtime = ref.read(musicPlayerRuntimeProvider);
     try {
+      await ref.read(settingsProvider.notifier).ensureLoaded();
+      if (!mounted) return;
       await runtime.restoreSession();
+      if (runtime.dependencies.isIOS) {
+        unawaited(runtime.handler?.recoverRestoredArtwork());
+      }
       await ref.read(extensionProvider.notifier).ensureInitialized();
       if (!mounted) return;
       await runtime.recoverRestoredArtwork();
@@ -374,15 +385,27 @@ class _MainShellState extends ConsumerState<MainShell>
     });
   }
 
+  void _reprepareSongArtwork() {
+    if (mounted) refreshPreparedSongListArtwork(ref);
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      refreshPreparedSongListArtwork(ref);
+      final runtime = ref.read(musicPlayerRuntimeProvider);
+      if (runtime.dependencies.isIOS && runtime.handler?.mediaItem.value == null) {
+        unawaited(_restorePlayback());
+      }
+    }
     if (state == AppLifecycleState.resumed && _initialSafRepairComplete) {
       unawaited(_repairSafAccessIfNeeded());
       unawaited(ref.read(extensionAutoUpdateProvider.notifier).checkOnResume());
     } else if (state == AppLifecycleState.paused) {
-      unawaited(
-        ref.read(musicPlayerRuntimeProvider).handler?.persistCurrentSession(),
-      );
+      final runtime = ref.read(musicPlayerRuntimeProvider);
+      if (!runtime.dependencies.isIOS) {
+        unawaited(runtime.handler?.persistCurrentSession());
+      }
     }
   }
 
@@ -475,6 +498,9 @@ class _MainShellState extends ConsumerState<MainShell>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    if (Platform.isIOS) {
+      DownloadedEmbeddedCoverResolver.previewsCleared.removeListener(_reprepareSongArtwork);
+    }
     WidgetsBinding.instance.removeObserver(_backSwipe);
     usbAudioStatus.removeListener(_onUsbAudioStatusChanged);
     ShellNavigationService.unregisterTabSelectionHandler(this);
@@ -1058,6 +1084,7 @@ class _MainShellState extends ConsumerState<MainShell>
 
   @override
   Widget build(BuildContext context) {
+    watchInitialSongListArtwork(ref, context);
     ref.watch(
       playbackNotificationProvider((
         favorite: context.l10n.trackOptionAddToLoved,

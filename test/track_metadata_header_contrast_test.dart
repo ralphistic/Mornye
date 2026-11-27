@@ -17,9 +17,60 @@ import 'package:mornye/widgets/audio_quality_badges.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/widgets/mornye_chrome.dart';
 import 'package:mornye/widgets/mornye_metadata_row.dart';
+import 'package:mornye/widgets/song_list_artwork_prewarm.dart';
+
+import 'support/prepared_playback_artwork_fixture.dart';
 import 'package:mornye/widgets/network_offline_actions.dart';
 
 void main() {
+  testWidgets('track details first frame uses the selected row thumbnail', (
+    tester,
+  ) async {
+    Directory? root;
+    try {
+      final seed = await tester.runAsync(() async {
+        root = await Directory.systemTemp.createTemp('details-thumbnail');
+        final thumbnail = File('${root!.path}/row.png');
+        await thumbnail.writeAsBytes(await artworkPng(64));
+        await prewarmSongListArtwork(
+          ['/music/selected.flac'],
+          cacheWidth: 64,
+          resolve: (_) async => thumbnail.path,
+          isActive: () => true,
+        );
+        return thumbnail.path;
+      });
+      final item = LocalLibraryItem(
+        id: 'details-seed', trackName: 'Selected song', artistName: 'Artist',
+        albumName: 'Album', filePath: '/missing/selected.flac',
+        coverPath: '/old/stale-cover.png', scannedAt: DateTime(2026),
+      );
+      // Assert the first frame before the asynchronous file check finishes.
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          theme: MornyeTheme.build(Brightness.dark),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: TrackMetadataScreen(
+            localItem: item,
+            initialEmbeddedThumbnail: seed,
+          ),
+        ),
+      ));
+      final raw = find.descendant(
+        of: find.byType(Hero),
+        matching: find.byType(RawImage),
+      );
+      expect(raw, findsOneWidget);
+      expect(tester.widget<RawImage>(raw).image!.width, 64);
+      expect(tester.takeException(), isNull);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      SongListDecodedArtworkCache.clear();
+      if (root != null) await tester.runAsync(() => root!.delete(recursive: true));
+    }
+  });
+
   for (final useFileUri in [false, true]) {
     testWidgets('Mornye metadata renders local artwork (URI=$useFileUri)', (
       tester,

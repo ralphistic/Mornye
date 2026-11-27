@@ -297,6 +297,7 @@ class _MusicGapless {
     handler._covers
       ..fetchFor(next)
       ..fetchAhead();
+    handler._warmPlaybackArtwork();
     handler._lastBroadcastPosition = Duration.zero;
     handler._lastPositionBroadcastAt = null;
     handler._broadcastPosition(Duration.zero, force: true);
@@ -306,6 +307,7 @@ class _MusicGapless {
           : PlaybackDeckState.playing,
     );
     handler._lastPeriodicPersistAt = DateTime.now();
+    unawaited(handler._refreshIosControlsAfterTransition());
     unawaited(handler._persistSession(position: Duration.zero));
     if (!next.isNetwork) {
       unawaited(handler._recoverEmbeddedArtwork(next, current));

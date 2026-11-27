@@ -366,6 +366,8 @@ class _MiniPlayerBodyState extends ConsumerState<_MiniPlayerBody> {
                                 Opacity(opacity: landing ? 0 : 1, child: cover),
                             child: PlayerArtwork(
                               artUri: mediaItem.artUri?.toString(),
+                              embeddedArtworkPending: mediaItem.extras?['embeddedArtworkPending'] == true,
+                              pendingPreviewUri: mediaItem.extras?['embeddedArtworkPreview'] as String?,
                               colorScheme: colorScheme,
                               cacheWidth: PlayerArtwork.miniCacheWidth,
                               iconSize: 22,

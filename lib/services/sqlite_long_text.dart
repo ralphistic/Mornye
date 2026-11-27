@@ -9,6 +9,22 @@ import 'package:sqflite/sqflite.dart';
 /// that can grow past this many bytes is read in pieces of this size.
 const longTextPieceBytes = 524288;
 
+/// An ordinary SELECT reveals the database's actual TEXT-to-BLOB encoding.
+/// Some native SQLite builds return no rows for PRAGMA encoding. Do not
+/// assume that an optional PRAGMA or a result row is available.
+Future<String?> sqliteTextEncoding(DatabaseExecutor db) async {
+  final rows = await db.rawQuery(
+    "SELECT hex(CAST('A' AS BLOB)) AS encoding_bytes",
+  );
+  if (rows.length != 1) return null;
+  return switch (rows.first['encoding_bytes']) {
+    '41' => 'UTF-8',
+    '4100' => 'UTF-16le',
+    '0041' => 'UTF-16be',
+    _ => null,
+  };
+}
+
 /// Selects [column] as [alias] only when it fits one piece (else null), and
 /// its size in bytes as `<alias>_bytes`, so no row returned is too long.
 String selectShortText(String column, String alias) =>
@@ -98,12 +114,11 @@ Future<(Map<String, Object?>, T)?> readLongTextRow<T>(
       );
       text.add(piece.single['piece'] as Uint8List);
     }
-    final encoding = await txn.rawQuery('PRAGMA encoding');
-    return (
-      rows.single,
-      text.takeBytes(),
-      encoding.single.values.single as String,
-    );
+    final encoding = await sqliteTextEncoding(txn);
+    if (encoding == null) {
+      throw StateError('Could not determine SQLite text encoding for $table');
+    }
+    return (rows.single, text.takeBytes(), encoding);
   }
 
   final stored = db is Database ? await db.transaction(read) : await read(db);

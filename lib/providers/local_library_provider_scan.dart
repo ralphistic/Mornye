@@ -335,7 +335,13 @@ extension _LocalLibraryScan on LocalLibraryNotifier {
           _log.i('Skipped $skippedDownloads files already in download history');
         }
         if (forceFullScan) {
-          // A forced scan rewrites thumbnails under their existing paths.
+          // Invalidate in-memory resolutions, including same-timestamp edits.
+          // Content-verified FLAC previews can survive: their source metadata
+          // must match before reuse. Other preview types are still cleared.
+          await DownloadedEmbeddedCoverResolver.clearPersistentCache(
+            preserveVerifiedFlacPreviews: true,
+          );
+          DownloadedEmbeddedCoverResolver.announcePreviewsCleared();
           PaintingBinding.instance.imageCache
             ..clear()
             ..clearLiveImages();
@@ -656,6 +662,15 @@ extension _LocalLibraryScan on LocalLibraryNotifier {
     if (pruneCoverCache) await _pruneLibraryCoverCache();
     if (!ref.mounted) return;
     unawaited(ref.read(libraryAlbumArtworkProvider.notifier).restoreMissing());
+    if (Platform.isIOS) {
+      try {
+        await ref.read(libraryCollectionsProvider.notifier)
+            .reconcilePendingRestoredLocalTracks();
+      } catch (error) {
+        _log.w('Deferred local collection matching failed: $error');
+      }
+    }
+    if (!ref.mounted) return;
 
     final message = summary();
     if (state.scanErrorCount > 0) {

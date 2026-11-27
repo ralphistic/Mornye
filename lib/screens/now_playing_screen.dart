@@ -569,6 +569,9 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
             child: key == _compactArtworkKey
                 ? PlayerArtwork(
                     artUri: mediaItem.artUri?.toString(),
+                    holdPendingArtwork: true,
+                    embeddedArtworkPending: mediaItem.extras?['embeddedArtworkPending'] == true,
+                    pendingPreviewUri: mediaItem.extras?['embeddedArtworkPreview'] as String?,
                     colorScheme: colorScheme,
                     cacheWidth: PlayerArtwork.transitionCacheWidth(context),
                   )

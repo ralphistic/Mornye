@@ -619,7 +619,12 @@ class _DownloadedCoverSourceState extends State<_DownloadedCoverSource> {
       _refreshScheduled = false;
       if (!mounted) return;
       final nextPath = _resolveEmbeddedCoverPath();
-      if (nextPath != _embeddedCoverPath) {
+      // The resolver may confirm that a FLAC has no embedded picture while
+      // its path remains null. Rebuild to allow the normal fallback then.
+      if (nextPath != _embeddedCoverPath ||
+          DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(
+            widget.downloadedFilePath,
+          )) {
         setState(() => _embeddedCoverPath = nextPath);
       }
     });
@@ -683,11 +688,16 @@ class _DownloadedOrRemoteCover extends StatelessWidget {
             fit: BoxFit.cover,
             cacheWidth: cacheWidth,
             cacheHeight: cacheHeight,
-            gaplessPlayback: true,
+            gaplessPlayback: false,
             filterQuality: FilterQuality.low,
             errorBuilder: (_, _, _) => _fallback(),
           );
-        } else if (remote != null && remote.isNotEmpty) {
+        } else if (remote != null &&
+            remote.isNotEmpty &&
+            (!DownloadedEmbeddedCoverResolver.isLocalFlac(downloadedFilePath) ||
+                DownloadedEmbeddedCoverResolver.hasNoEmbeddedCover(
+                  downloadedFilePath,
+                ))) {
           child = CachedCoverImage(
             imageUrl: remote,
             width: width,

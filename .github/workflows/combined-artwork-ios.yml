@@ -1,0 +1,138 @@
+name: v5.4.5 combined artwork regression and iOS IPA
+on:
+  push:
+    branches: [fix/v5.4.5-artwork-combined]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: combined-artwork-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  dart-artwork:
+    if: github.event_name != 'pull_request' || github.head_ref == 'fix/v5.4.5-artwork-combined'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: .fvmrc
+          cache: true
+      - name: Prepare Flutter SDK
+        run: dart scripts/prepare_flutter_sdk.dart
+      - name: Dependencies and localization
+        run: |
+          flutter pub get
+          dart scripts/gen_l10n.dart
+      - name: Analyze artwork consumers and tests
+        run: |
+          flutter analyze --no-pub lib/main.dart lib/providers/local_library_provider.dart lib/screens/home_tab_widgets.dart lib/screens/mornye_library_screen.dart lib/providers/library_browse_provider.dart test/library_browse_paging_test.dart lib/screens/main_shell.dart lib/screens/queue_tab.dart lib/screens/queue_tab_item_widgets.dart lib/widgets/song_list_artwork_prewarm.dart lib/widgets/album_browse_artwork.dart lib/widgets/ios_status_bar_scroll_target.dart lib/screens/home_tab.dart lib/widgets/collection_scaffold.dart lib/widgets/library_directory_view.dart lib/screens/settings/settings_tab.dart test/ios_status_bar_scroll_target_test.dart test/album_browse_artwork_test.dart test/mornye_library_browse_test.dart test/song_list_artwork_prewarm_test.dart test/song_list_artwork_cache_test.dart lib/services/downloaded_embedded_cover_resolver.dart lib/services/music_player_service.dart lib/services/playable_media.dart lib/utils/playback_artwork.dart lib/widgets/cached_cover_image.dart lib/widgets/library_search_results.dart lib/widgets/local_library_artwork_builder.dart lib/widgets/player_artwork.dart test/downloaded_embedded_cover_resolver_test.dart test/local_library_artwork_builder_test.dart test/music_player_media_metadata_test.dart test/playback_artwork_test.dart lib/services/downloaded_embedded_cover_resolver_playback.dart lib/widgets/mornye_player_artwork.dart lib/widgets/mini_player.dart lib/widgets/material_player_backdrop.dart lib/screens/track_metadata_screen.dart lib/screens/track_metadata_header.dart lib/screens/track_metadata_screen_cover.dart lib/screens/queue_tab_navigation.dart lib/screens/queue_tab_helpers.dart test/track_metadata_header_contrast_test.dart lib/screens/now_playing_screen.dart test/player_artwork_test.dart lib/services/restored_local_collections.dart lib/providers/library_collections_provider.dart lib/services/library_collections_database.dart test/restored_local_collections_test.dart test/playback_prepared_artwork_test.dart test/support/prepared_playback_artwork_fixture.dart test/music_player_runtime_test.dart lib/services/music_player_gapless.dart lib/services/music_player_automix.dart lib/services/playback_session_restore.dart lib/services/music_player_runtime.dart test/playback_session_restore_test.dart test/playback_session_storage_test.dart test/playback_session_writer_test.dart lib/services/app_state_database.dart lib/services/playback_session_writer.dart test/audio_service_playback_sync_test.dart
+      - name: iOS status bar and frame-paced cover scheduling regression
+        timeout-minutes: 4
+        run: flutter test --reporter expanded --timeout 90s test/ios_status_bar_scroll_target_test.dart test/album_browse_artwork_test.dart test/now_playing_route_test.dart test/lazy_tab_view_test.dart
+      - name: Embedded resolver regression
+        timeout-minutes: 5
+        run: flutter test --reporter expanded --timeout 45s test/downloaded_embedded_cover_resolver_test.dart
+      - name: Playback and widget regression
+        timeout-minutes: 6
+        run: flutter test --reporter expanded --timeout 45s test/playback_artwork_test.dart test/music_player_media_metadata_test.dart test/local_library_artwork_builder_test.dart test/song_list_artwork_prewarm_test.dart test/song_list_artwork_cache_test.dart test/player_artwork_test.dart test/restored_local_collections_test.dart test/collection_restore_codec_test.dart test/library_collections_relocation_test.dart test/playback_prepared_artwork_test.dart
+      - name: Selected track details, pagination and cover regression
+        timeout-minutes: 5
+        run: flutter test --reporter expanded --timeout 90s test/track_metadata_header_contrast_test.dart test/queue_library_pager_test.dart
+      - name: Album browse artwork and layout regression
+        timeout-minutes: 5
+        run: flutter test --reporter expanded --timeout 90s test/mornye_library_browse_test.dart test/library_browse_paging_test.dart test/library_browse_sqlite_paging_test.dart
+      - name: Rapid iOS transport artwork regression
+        timeout-minutes: 3
+        run: flutter test --reporter expanded --timeout 45s test/music_player_runtime_test.dart --plain-name 'prepared iOS FLAC covers publish with each rapid transport change'
+      - name: Playback session persistence and restore regression
+        timeout-minutes: 5
+        run: flutter test --reporter expanded --timeout 45s test/playback_session_restore_test.dart test/playback_session_storage_test.dart test/playback_session_writer_test.dart test/playback_resume_store_test.dart test/audio_service_playback_sync_test.dart
+      - name: iOS playback continuity regression
+        timeout-minutes: 4
+        run: flutter test --reporter expanded --timeout 45s test/music_player_runtime_test.dart --plain-name 'iOS playback continuity'
+      - name: Existing runtime and transport regression
+        timeout-minutes: 8
+        run: flutter test --reporter expanded --timeout 90s test/music_player_runtime_test.dart test/music_player_gapless_test.dart test/music_player_prepared_start_test.dart test/music_player_automix_test.dart
+  rust-artwork:
+    if: github.event_name != 'pull_request' || github.head_ref == 'fix/v5.4.5-artwork-combined'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: rust_backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust_backend
+      - name: ICC and core artwork regression
+        run: |
+          cargo test --locked -p mornye-core cover:: -- --nocapture
+      - name: Thumbnail freshness regression
+        run: |
+          cargo test --locked -p mornye-extensions backend::cover::tests:: -- --nocapture
+      - name: Library scan regression
+        run: |
+          cargo test --locked -p mornye-extensions backend::library::scan::tests:: -- --nocapture
+  test-and-build:
+    needs: [dart-artwork, rust-artwork]
+    runs-on: xcode-27
+    timeout-minutes: 120
+    env:
+      MORNYE_DISCORD_SDK: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Rust
+        working-directory: rust_backend
+        run: rustup show
+      - name: Test artwork regression
+        working-directory: rust_backend
+        run: |
+          cargo test --locked -p mornye-core cover:: -- --nocapture
+      - name: Build Rust iOS backend
+        run: bash scripts/build_rust_backend.sh ios
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: .fvmrc
+          cache: true
+      - name: Prepare Flutter SDK
+        run: dart scripts/prepare_flutter_sdk.dart
+      - name: Configure dependencies
+        run: |
+          flutter pub get
+          dart scripts/gen_l10n.dart
+          cd ios
+          pod install
+      - name: Build unsigned iOS app
+        run: |
+          flutter build ios --release --no-codesign --config-only --target lib/main.dart
+          cd ios
+          xcodebuild -workspace Runner.xcworkspace -scheme Runner -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -archivePath build/Runner.xcarchive archive CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=""
+          cd ..
+          python3 -m unittest discover -s scripts -p 'test_check_backend_ios.py'
+          python3 scripts/check_backend_ios.py ios/build/Runner.xcarchive/Products/Applications/Runner.app --dsym ios/build/Runner.xcarchive/dSYMs/Runner.app.dSYM --backend rust --archs arm64 --platform ios --release
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p build/ios/ipa/Payload
+          ditto ios/build/Runner.xcarchive/Products/Applications/Runner.app build/ios/ipa/Payload/Runner.app
+          cd build/ios/ipa
+          zip -qr Mornye-v5.4.5-combined-unsigned.ipa Payload
+          test -s Mornye-v5.4.5-combined-unsigned.ipa
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: mornye-v5.4.5-combined-unsigned-ipa
+          path: build/ios/ipa/Mornye-v5.4.5-combined-unsigned.ipa

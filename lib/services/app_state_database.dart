@@ -19,6 +19,7 @@ const _recentTable = 'recent_access_items';
 const _hiddenRecentTable = 'hidden_recent_downloads';
 const _recentStateTable = 'recent_access_state';
 const _playbackSessionTable = 'playback_session';
+const _playbackModesKey = 'ios_playback_modes_v1';
 
 const _legacyQueueKey = 'download_queue';
 const _legacyRecentAccessKey = 'recent_access_history';
@@ -439,6 +440,26 @@ class AppStateDatabase {
     await prefs.setBool(_queueMigrationKey, true);
   }
 
+  /// Independent user preferences, including explicit off, survive a cleared
+  /// queue. One preference value keeps both choices together.
+  Future<({bool shuffle, String repeatMode})?> getPlaybackModes() async {
+    final values = (await _prefs).getStringList(_playbackModesKey);
+    if (values == null || values.length != 2) return null;
+    if (values.first != 'true' && values.first != 'false') return null;
+    if (!const {'none', 'one', 'all'}.contains(values.last)) return null;
+    return (shuffle: values.first == 'true', repeatMode: values.last);
+  }
+
+  Future<void> savePlaybackModes({
+    required bool shuffle,
+    required String repeatMode,
+  }) async {
+    final saved = await (await _prefs).setStringList(
+      _playbackModesKey, [shuffle.toString(), repeatMode],
+    );
+    if (!saved) throw StateError('Playback preferences were not saved');
+  }
+
   Future<Map<String, dynamic>?> getPlaybackSession() async {
     final stored = await readJsonTextRow(
       await database,
@@ -492,10 +513,19 @@ class AppStateDatabase {
     required bool shuffle,
     required String repeatMode,
   }) async {
-    // Bytes cross the platform channel as one copy; SQLite reads them as
-    // text in the database encoding, which only UTF-8 matches.
-    final utf8Text = _utf8Databases[db] ??=
-        (await db.rawQuery('PRAGMA encoding')).single.values.single == 'UTF-8';
+    // iOS uses native SQLite, where PRAGMA encoding can return no rows.
+    // The optimized byte binding is optional: when the encoding cannot be
+    // established, bind a Dart String and let SQLite encode its own TEXT.
+    // Never let an encoding optimization prevent a playback checkpoint.
+    var utf8Text = _utf8Databases[db];
+    if (utf8Text == null) {
+      try {
+        utf8Text = await sqliteTextEncoding(db) == 'UTF-8';
+      } catch (_) {
+        utf8Text = false;
+      }
+      _utf8Databases[db] = utf8Text;
+    }
     await db.rawInsert(
       'INSERT OR REPLACE INTO $_playbackSessionTable '
       '(id, media_json, current_index, position_ms, shuffle, repeat_mode, '

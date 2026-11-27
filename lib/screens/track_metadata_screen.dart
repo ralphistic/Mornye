@@ -107,6 +107,7 @@ import 'package:mornye/widgets/audio_quality_badges.dart' show ExplicitBadge;
 import 'package:mornye/widgets/hires_check_card.dart';
 import 'package:mornye/widgets/batch_convert_sheet.dart';
 import 'package:mornye/widgets/cached_cover_image.dart';
+import 'package:mornye/widgets/song_list_artwork_prewarm.dart';
 import 'package:mornye/widgets/open_on_platform_sheet.dart';
 import 'package:mornye/widgets/metadata_barcode.dart';
 import 'package:mornye/widgets/scroll_edge_fade.dart';
@@ -172,6 +173,7 @@ class TrackMetadataScreen extends ConsumerStatefulWidget {
   final List<LocalLibraryItem>? localNavigationItems;
   final int? navigationIndex;
   final String? coverHeroTag;
+  final String? initialEmbeddedThumbnail;
 
   const TrackMetadataScreen({
     super.key,
@@ -181,6 +183,7 @@ class TrackMetadataScreen extends ConsumerStatefulWidget {
     this.localNavigationItems,
     this.navigationIndex,
     this.coverHeroTag,
+    this.initialEmbeddedThumbnail,
   }) : assert(
          item != null || localItem != null,
          'Either item or localItem must be provided',
@@ -265,6 +268,7 @@ class _TrackMetadataScreenState extends ConsumerState<TrackMetadataScreen>
   Map<String, dynamic>? _editedMetadata;
   String? _resolvedAudioFormat;
   String? _embeddedCoverPreviewPath;
+  String? _initialEmbeddedThumbnail;
   ({int width, int height})? _embeddedCoverDimensions;
   static final RegExp _invalidFileNameChars = RegExp(r'[<>:"/\\|?*\x00-\x1f]');
   static final RegExp _multiUnderscore = RegExp(r'_+');
@@ -297,12 +301,14 @@ class _TrackMetadataScreenState extends ConsumerState<TrackMetadataScreen>
     _currentDownloadItem = widget.item;
     _currentLocalLibraryItem = widget.localItem;
     _currentNavigationIndex = widget.navigationIndex;
+    _initialEmbeddedThumbnail = widget.initialEmbeddedThumbnail;
     _unsubscribeMetadata = SourceMetadataEvents.instance.subscribe((
       source,
     ) async {
       if (!mounted || source != cleanFilePath) return;
       setState(() {
         _metadataLoadGeneration++;
+        _initialEmbeddedThumbnail = null;
         _hasLoadedResolvedAudioMetadata = false;
         _editedMetadata = null;
         _embeddedLyricsChecked = false;
@@ -322,6 +328,7 @@ class _TrackMetadataScreenState extends ConsumerState<TrackMetadataScreen>
       if (!mounted || source != cleanFilePath) return;
       setState(() {
         _metadataLoadGeneration++;
+        _initialEmbeddedThumbnail = null;
         _fileAccess = const FileAccessMissing();
       });
     });
@@ -830,6 +837,7 @@ class _TrackMetadataScreenState extends ConsumerState<TrackMetadataScreen>
         _editedMetadata = null;
         _resolvedAudioFormat = null;
         _embeddedCoverPreviewPath = null;
+        _initialEmbeddedThumbnail = null;
         _embeddedCoverDimensions = null;
       });
 

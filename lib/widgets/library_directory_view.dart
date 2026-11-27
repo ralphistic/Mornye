@@ -1,6 +1,8 @@
+import 'dart:io';
 import 'dart:math';
 
 import 'package:material_ui/material_ui.dart';
+import 'package:mornye/widgets/ios_status_bar_scroll_target.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/controllers/clickable_metadata.dart';
 import 'package:mornye/controllers/local_track_batch_actions.dart';
@@ -81,6 +83,7 @@ class LibraryDirectoryView extends ConsumerStatefulWidget {
 
 class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
     with SelectionModeMixin<LibraryDirectoryView> {
+  final _standaloneScroll = ScrollController();
   final SelectionOverlayController _selectionOverlay =
       SelectionOverlayController();
 
@@ -107,6 +110,7 @@ class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
   @override
   void dispose() {
     _selectionOverlay.dispose();
+    _standaloneScroll.dispose();
     super.dispose();
   }
 
@@ -482,7 +486,9 @@ class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
     if (showsSelectionBar || _selectionOverlay.isVisible) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _syncSelectionBar());
     }
+    final explicitScroll = Platform.isIOS && widget.showHeader;
     final scrollView = CustomScrollView(
+      controller: explicitScroll ? _standaloneScroll : null,
       key: PageStorageKey('library-folder:${key ?? ''}'),
       physics: const AlwaysScrollableScrollPhysics(),
       slivers: [
@@ -527,7 +533,12 @@ class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
             ref.invalidate(libraryDirectoryIndexProvider);
             await ref.read(libraryDirectoryIndexProvider.future);
           },
-          child: scrollView,
+          child: explicitScroll
+              ? IosStatusBarScrollTarget(
+                  controller: _standaloneScroll,
+                  child: scrollView,
+                )
+              : scrollView,
         ),
       ),
     );

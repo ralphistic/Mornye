@@ -189,7 +189,7 @@ extension _QueueTabNavigation on _QueueTabState {
             historyItem.filePath,
             onChanged: _onEmbeddedCoverChanged,
           ));
-    if (!mounted) return;
+    if (!context.mounted) return;
     final artworkSource = embeddedCoverPath ?? historyItem.coverUrl;
     if (embeddedCoverPath == null && !context.isMornye) {
       precacheCoverImage(context, historyItem.coverUrl);
@@ -240,7 +240,7 @@ extension _QueueTabNavigation on _QueueTabState {
             item.filePath,
             onChanged: _onEmbeddedCoverChanged,
           ));
-    if (!mounted) return;
+    if (!context.mounted) return;
     final artworkSource = embeddedCoverPath ?? item.coverUrl;
     if (embeddedCoverPath == null && !context.isMornye) {
       precacheCoverImage(context, item.coverUrl);
